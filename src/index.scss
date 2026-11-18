@@ -1,0 +1,734 @@
+@use "./variables.scss" as *;
+
+// UXP CSS 支持有限（官方 2022 文档）：不支持 gap/animation/@keyframes/transform/
+// box-sizing/line-height/cursor/outline/resize；间距一律用 margin 实现。
+// UXP 对 label 等元素有默认居中样式，继承的 text-align 无法覆盖，
+// 须在元素自身显式声明 text-align: left。
+// 字号统一用 px（UXP 的 rem 基准与浏览器可能不一致，截图显示偏大）。
+// 控件外观（按钮/输入框/下拉/复选框/标题）由 UXP 内置 Spectrum 组件（sp-*）负责，
+// 本文件只保留布局、间距与自定义区块（警告条/预览/历史等）样式。
+
+html,
+body {
+  height: 100vh;
+  background-color: var(--uxp-host-background-color);
+  // 控件宽度偶尔超出面板一两像素时，禁止出现整宽的横向滚动条
+  overflow-x: hidden;
+}
+
+// ---- 基础元素 ----
+
+// 主面板要占满面板高度，队列区才能用 flex 吃满剩余空间。
+// padding 放在 .redraw-panel 上：flex 项的外尺寸包含内边距，不会额外撑出滚动条。
+#app {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  overflow: hidden;
+}
+
+p {
+  margin: 0;
+  text-align: left;
+}
+
+// label 在 UXP 默认样式中居中，须在元素自身覆盖
+label,
+span,
+input,
+select,
+textarea {
+  text-align: left;
+}
+
+// ---- 主面板 ----
+// UXP 无 gap：面板直接子块用 margin-bottom 隔开
+
+.redraw-panel {
+  display: flex;
+  flex-direction: column;
+  // UXP 不支持百分比宽度（width: 100% 无效），交叉轴拉伸必须用 align-items
+  align-items: stretch;
+  text-align: left;
+  // 占满 #app 高度：队列区 flex:1 才有可分配的剩余空间
+  flex: 1;
+  min-height: 0;
+  padding: 8px;
+  // 「详情」弹层以面板为定位基准
+  position: relative;
+}
+
+// 区块间距由 10px 收紧到 6px（编辑区内部再单独控制）
+.redraw-panel__header,
+.redraw-panel__warning,
+.redraw-panel__error {
+  margin-bottom: 6px;
+}
+
+// sp-heading 是自定义元素，自带默认外边距且可能居中，须显式重置
+.redraw-panel__title,
+.settings-panel__title {
+  margin: 0;
+  text-align: left;
+}
+
+// 主面板标题：由 sp-heading(size=M ≈18px) 改为 12px 文本，整行 28px
+.redraw-panel__title {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+// 顶栏高度跟随 sp-button 默认规格（Spectrum 按钮 32px 高），不再压缩按钮
+.redraw-panel__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 32px;
+  flex: none;
+}
+
+// ---- 编辑区：展开态固定 248px（模板/操作按钮恢复 32px 标准高度后需相应加高），
+// 队列折叠时 flex:1 吃掉剩余高度 ----
+
+.redraw-panel__editor {
+  flex: none;
+  height: 248px;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  margin-bottom: 6px;
+}
+
+.redraw-panel__editor--grow {
+  flex: 1;
+  height: auto;
+}
+
+.redraw-panel__field {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  flex: 1;
+  min-height: 0;
+  margin-bottom: 5px;
+}
+
+// UXP 对表单控件的标签选择器与百分比宽度支持不可靠：
+// 用 class 选择器匹配，flex row 包裹 + flex:1 强制水平拉伸
+.redraw-panel__field-control {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+// sp-textarea 的外框/内边距由 Spectrum 提供，这里只管布局尺寸；
+// 高度由编辑区决定（展开态约 3~4 行），折叠后随编辑区一起长高
+.redraw-panel__prompt {
+  flex: 1;
+  min-height: 44px;
+}
+
+// ---- Siliconed 处理方式：下拉菜单放在「加入队列」左侧 ----
+// 按 4 个汉字 + 内边距 + 箭头预留 116px，避免选中项被压成「自…」
+// UXP 下 flex-basis/min-width 对 sp-picker 不可靠，必须给显式 width
+.redraw-panel__mode-select {
+  flex: none;
+  width: 116px;
+  min-width: 116px;
+  height: 32px;
+  margin-right: 6px;
+}
+
+// ---- 提示词模板按钮（两行三列，空模板不渲染；UXP 不支持 gap，用 margin 拉开） ----
+.redraw-panel__templates {
+  display: flex;
+  flex-direction: column;
+  flex: none;
+  margin-bottom: 5px;
+}
+
+.redraw-panel__template-row {
+  display: flex;
+  margin-bottom: 4px;
+}
+
+.redraw-panel__template-row:last-child {
+  margin-bottom: 0;
+}
+
+// 保持 sp-button 默认高度与字号（32px / 默认字号），只负责等宽排布
+.redraw-panel__template-btn {
+  flex: 1;
+  margin-right: 4px;
+}
+
+.redraw-panel__template-btn:last-child {
+  margin-right: 0;
+}
+
+.redraw-panel__actions {
+  display: flex;
+  flex: none;
+  margin-bottom: 5px;
+}
+
+.redraw-panel__secondary {
+  margin-right: 6px;
+}
+
+.redraw-panel__primary {
+  flex: 1;
+}
+
+// ---- 图层超分（SeedVR2）：目标长边输入 + 放大按钮（原图层保留并隐藏） ----
+
+.redraw-panel__upscale {
+  display: flex;
+  align-items: center;
+  margin-bottom: 10px;
+}
+
+.redraw-panel__upscale-label {
+  flex: 0 0 auto;
+  margin-right: 8px;
+  font-size: 12px;
+  color: var(--uxp-host-text-color-secondary);
+}
+
+.redraw-panel__upscale-input {
+  flex: 0 0 88px;
+  margin-right: 6px;
+}
+
+.redraw-panel__upscale-unit {
+  flex: 0 0 auto;
+  margin-right: 8px;
+  font-size: 11px;
+  color: var(--uxp-host-text-color-secondary);
+}
+
+.redraw-panel__upscale-btn {
+  flex: 1;
+}
+
+// ---- 警告条（生成/贴回进行中；UXP 不支持 color-mix，用固定 rgba 色值） ----
+
+.redraw-panel__warning {
+  font-size: 12px;
+  color: #d8a219;
+  border: 1px solid rgba(216, 162, 25, 0.5);
+  border-radius: 6px;
+  padding: 6px 8px;
+  background-color: rgba(216, 162, 25, 0.12);
+}
+
+// ---- 选区条：32px 缩略图 + 两行文字 +「详情 ›」（完整信息在弹层） ----
+
+.redraw-panel__sel {
+  display: flex;
+  align-items: center;
+  flex: none;
+}
+
+.redraw-panel__sel-thumb {
+  width: 32px;
+  height: 32px;
+  flex: none;
+  margin-right: 7px;
+  border: 1px solid var(--uxp-host-border-color);
+  border-radius: 4px;
+  // UXP 暂不支持 object-fit：不支持时按原比例缩放，可接受
+  object-fit: cover;
+}
+
+.redraw-panel__sel-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.redraw-panel__sel-text,
+.redraw-panel__sel-sub {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.redraw-panel__sel-text {
+  font-size: 11px;
+}
+
+.redraw-panel__sel-sub {
+  font-size: 10px;
+  color: var(--uxp-host-text-color-secondary);
+}
+
+.redraw-panel__sel-more {
+  flex: none;
+  margin-left: 6px;
+  font-size: 10px;
+  color: #9a9a9a;
+}
+
+// 预览图（详情弹层内）：UXP 百分比尺寸不可靠，显示尺寸由 JSX 算 px 内联
+.redraw-panel__preview-label {
+  font-size: 11px;
+  color: var(--uxp-host-text-color-secondary);
+  margin-top: 4px;
+}
+.redraw-panel__preview {
+  display: block;
+  border: 1px solid var(--uxp-host-border-color);
+  // 透明底棋盘格，便于检查贴回内容的透明区域（UXP 不支持 gradient 时仅无纹理）
+  background-image: linear-gradient(45deg, #8882 25%, transparent 25%),
+    linear-gradient(-45deg, #8882 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, #8882 75%),
+    linear-gradient(-45deg, transparent 75%, #8882 75%);
+  background-size: 12px 12px;
+  background-position: 0 0, 0 6px, 6px -6px, -6px 0;
+}
+
+.redraw-panel__error {
+  font-size: 12px;
+  color: #f66;
+  white-space: pre-wrap;
+}
+
+.redraw-panel__hint {
+  font-size: 10px;
+  color: var(--uxp-host-text-color-secondary);
+  flex: none;
+}
+
+// ---- 任务队列（标题栏常驻 32px；列表 flex:1 滚动，可完全折叠） ----
+
+.redraw-panel__queue {
+  flex: 1;
+  min-height: 32px;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.redraw-panel__queue--collapsed {
+  flex: none;
+}
+
+.redraw-panel__queue-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 32px;
+  flex: none;
+}
+
+.redraw-panel__queue-title {
+  font-size: 11px;
+  color: #d0d0d0;
+}
+
+.redraw-panel__queue-tools {
+  display: flex;
+  align-items: center;
+}
+
+// 队列区按钮（表头「清空已完成」与条目内「取消 / 贴回 / 重试」）统一走
+// sp-button 默认规格：高 32px、最小宽 72px、默认字号，侧边留白由 Spectrum 内边距决定，
+// 不再压缩高度/字号，保证与设计规范一致。
+.redraw-panel__queue-tools sp-button {
+  margin-right: 8px;
+}
+
+.redraw-panel__queue-toggle {
+  font-size: 10px;
+  color: #b9b9b9;
+}
+
+.redraw-panel__queue-list {
+  flex: 1;
+  min-height: 0;
+  // 高度由 flex 分配（不写死），列表随面板伸缩并滚动
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  margin-top: 4px;
+  padding-top: 4px;
+  border-top: 1px solid var(--uxp-host-border-color);
+}
+
+// ---- 详情弹层（覆盖主面板，避免挤占固定高度的编辑区） ----
+
+.redraw-panel__overlay {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  background-color: var(--uxp-host-background-color);
+}
+
+.redraw-panel__overlay-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 32px;
+  flex: none;
+  margin-bottom: 6px;
+}
+
+.redraw-panel__overlay-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+
+  // 弹层里的说明文字要换行显示（列表条里的同款样式是单行省略）
+  .redraw-panel__sel-sub {
+    white-space: normal;
+    overflow: visible;
+    margin-bottom: 4px;
+  }
+}
+
+.redraw-panel__item {
+  display: flex;
+  align-items: center;
+  border: 1px solid var(--uxp-host-border-color);
+  border-radius: 4px;
+  padding: 4px 6px;
+  margin-bottom: 4px;
+  // 列表可滚动后禁止条目被压缩，保持内容原始高度
+  flex: none;
+}
+
+.redraw-panel__item-slot {
+  width: 30px;
+  height: 30px;
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 3px;
+  overflow: hidden;
+  border: 1px solid var(--uxp-host-border-color);
+  margin-right: 7px;
+}
+
+.redraw-panel__item-thumb {
+  width: 100%;
+  height: 100%;
+  display: block;
+  // UXP 暂不支持 object-fit：不支持时按原比例缩放，可接受
+  object-fit: cover;
+  // 透明底棋盘格
+  background-image: linear-gradient(45deg, #8882 25%, transparent 25%),
+    linear-gradient(-45deg, #8882 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, #8882 75%),
+    linear-gradient(-45deg, transparent 75%, #8882 75%);
+  background-size: 8px 8px;
+  background-position: 0 0, 0 4px, 4px -4px, -4px 0;
+}
+
+.redraw-panel__item-placeholder {
+  font-size: 11px;
+  color: var(--uxp-host-text-color-secondary);
+}
+
+// UXP 不支持 CSS 动画：圆环由 JS 切换高亮边模拟旋转
+.redraw-panel__item-spinner {
+  width: 14px;
+  height: 14px;
+  flex: none;
+  border: 2px solid var(--uxp-host-border-color);
+  border-radius: 50%;
+}
+
+.redraw-panel__item-main {
+  flex: 1;
+  // 允许子元素 ellipsis 收缩
+  min-width: 0;
+}
+
+.redraw-panel__item-prompt {
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.redraw-panel__item-meta {
+  display: flex;
+  align-items: center;
+  font-size: 9px;
+  color: var(--uxp-host-text-color-secondary);
+  // 单行元信息：条目压到约 44px，超出部分裁掉
+  white-space: nowrap;
+  overflow: hidden;
+
+  > span {
+    margin-right: 6px;
+  }
+}
+
+.redraw-panel__item-layer {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.redraw-panel__item-mode {
+  flex: none;
+  color: var(--uxp-host-text-color-secondary);
+}
+
+.redraw-panel__item-note {
+  font-size: 10px;
+  color: #d8a219;
+  white-space: pre-wrap;
+}
+
+.redraw-panel__item-error {
+  font-size: 10px;
+  color: #f66;
+  white-space: pre-wrap;
+}
+
+.redraw-panel__item-progress {
+  font-size: 10px;
+  color: var(--uxp-host-text-color-secondary);
+  white-space: normal;
+}
+
+.redraw-panel__badge {
+  flex: none;
+  padding: 0 5px;
+  border-radius: 3px;
+  border: 1px solid transparent;
+
+  &--running {
+    color: var(--uxp-host-link-text-color);
+    border-color: var(--uxp-host-border-color);
+  }
+
+  &--pending {
+    color: #d8a219;
+    border-color: rgba(216, 162, 25, 0.5);
+  }
+
+  &--placed {
+    color: #4caf7d;
+    border-color: rgba(76, 175, 125, 0.5);
+  }
+
+  &--failed {
+    color: #f66;
+    border-color: rgba(255, 102, 102, 0.5);
+  }
+
+  &--needsAttention {
+    color: #d8a219;
+    border-color: rgba(216, 162, 25, 0.5);
+  }
+
+  &--queued {
+    color: var(--uxp-host-text-color-secondary);
+    border-color: var(--uxp-host-border-color);
+  }
+
+  &--cancelled {
+    color: var(--uxp-host-text-color-secondary);
+    border-color: var(--uxp-host-border-color);
+  }
+}
+
+.redraw-panel__item-action {
+  margin-left: 8px;
+}
+
+// ---- 设置二级面板 ----
+
+.settings-panel {
+  padding: 12px;
+  text-align: left;
+  // 中文文本行距：UXP 默认行高过紧，逐行文字会挤在一起
+  line-height: 1.5;
+  // 平台专属参数较多：内容超长时才滚动。
+  // 注意 1：用 max-height 而不是 height —— 固定高度会让容器在内容较少时留出一大块空白，
+  //         这块空白属于滚动区域，右侧/底部会一直挂着滚动条，看起来像遮挡物。
+  // 注意 2：这里不能用 flex 列布局 —— 容器有高度上限，UXP 会把富余高度摊到子项上，
+  //         拉高面板窗口时字段间距会被一起拉开。子元素全为块级，间距一律交给 margin。
+  // 注意 3：不能用 overflow-y: scroll —— UXP 的滚动条会占内部宽度，容易触发横向溢出。
+  max-height: 100%;
+  overflow-y: auto;
+  overflow-x: hidden;
+  // 底部留白：避免最后一行控件贴住滚动条
+  padding-bottom: 20px;
+
+  .settings-panel__title {
+    margin: 0 0 18px;
+  }
+}
+
+.settings-panel__field,
+.settings-panel__check,
+.settings-panel__row {
+  margin-bottom: 12px;
+}
+
+.settings-panel__field {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.settings-panel__field-label {
+  // inline span 多行时 UXP 高度计算异常（第二行会压到控件上），必须转块级
+  display: block;
+  align-self: stretch;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--uxp-host-text-color-secondary);
+  // 标签与下方下拉/输入框之间的呼吸空间（UXP 无 gap，只能靠 margin）
+  margin-bottom: 8px;
+}
+
+// 标签行：主标签 + 可选的小字说明（占位符提示等），与下方控件保持统一间距
+.settings-panel__field-head {
+  display: block;
+  margin-bottom: 8px;
+}
+
+.settings-panel__field-head .settings-panel__field-label {
+  margin-bottom: 0;
+}
+
+.settings-panel__field-hint {
+  display: block;
+  font-size: 10px;
+  line-height: 15px;
+  color: var(--uxp-host-text-color-secondary);
+  margin-top: 2px;
+}
+
+// 用 class 选择器匹配控件，flex row 包裹 + flex:1 强制水平拉伸
+.settings-panel__field-control {
+  display: flex;
+}
+
+// 仅 API Key 原生密码框使用：sp-textfield type="password" 在 macOS 读不到 value（官方已知缺陷）
+// UXP 原生 input 不给高度会塌成一条线，必须显式 height + line-height
+.settings-panel__input {
+  flex: 1;
+  height: 30px;
+  padding: 4px 8px;
+  font-size: 14px;
+  line-height: 20px;
+  border: 1px solid var(--uxp-host-border-color);
+  border-radius: 4px;
+  background-color: var(--uxp-host-background-color);
+  color: var(--uxp-host-text-color);
+}
+
+// Spectrum 控件同样用 flex:1 强制水平拉伸
+.settings-panel__dropdown,
+.settings-panel__textfield,
+.settings-panel__textarea {
+  flex: 1;
+}
+
+// 请求体 / 工作流 JSON 文本域：多行模板需要足够高度
+.settings-panel__textarea {
+  min-height: 96px;
+}
+
+// 提示词模板槽位：名称 + 提示词上下排列，槽位之间留出间距
+.settings-panel__template {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  margin-bottom: 12px;
+}
+
+.settings-panel__template-prompt {
+  margin-top: 6px;
+}
+
+/* 模板绑定的服务商：下拉 + 当前可用性提示（与名称/提示词同行纵向排布） */
+.settings-panel__template-provider {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.settings-panel__template-status {
+  flex: 1;
+  min-width: 0;
+  font-size: 11px;
+  color: var(--uxp-host-text-color-secondary, var(--uxp-host-text-color));
+}
+
+.settings-panel__template-status--invalid {
+  color: var(--uxp-host-notification-warning-color, var(--uxp-host-text-color));
+}
+
+.settings-panel__textarea--sm {
+  min-height: 56px;
+}
+
+.settings-panel__check {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+
+  // Spectrum 勾选框高度偏紧，显式撑开避免与下方说明文字贴住
+  sp-checkbox {
+    min-height: 24px;
+  }
+}
+
+.settings-panel__check-note {
+  display: block;
+  font-size: 11px;
+  line-height: 16px;
+  color: var(--uxp-host-text-color-secondary);
+}
+
+.settings-panel__row {
+  display: flex;
+}
+
+.settings-panel__row-btn {
+  margin-right: 8px;
+}
+
+.settings-panel__hint {
+  display: block;
+  margin: 0 0 16px;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--uxp-host-text-color-secondary);
+
+  code {
+    font-family: "Courier New", monospace;
+  }
+}
+
+.settings-panel__status {
+  margin: 0 0 16px;
+  font-size: 12px;
+  line-height: 18px;
+
+  &--ok {
+    color: var(--uxp-host-text-color);
+  }
+
+  &--error {
+    color: #f66;
+  }
+}

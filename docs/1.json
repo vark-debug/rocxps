@@ -1,0 +1,1404 @@
+[R2] 开始 v2 变体：打印完整 JSON，不做集合相等判定
+(index):73 [R2] V0a BEFORE {
+  "label": "V0a BEFORE",
+  "docId": 345,
+  "activeDocumentId": 342,
+  "activeChannels": "ERR:Unknown or unsupported active channels.",
+  "compositeChannels": [
+    {
+      "name": "红",
+      "kind": "component",
+      "visible": true
+    },
+    {
+      "name": "绿",
+      "kind": "component",
+      "visible": true
+    },
+    {
+      "name": "蓝",
+      "kind": "component",
+      "visible": true
+    }
+  ],
+  "componentChannels": [
+    {
+      "name": "红",
+      "kind": "component",
+      "visible": true
+    },
+    {
+      "name": "绿",
+      "kind": "component",
+      "visible": true
+    },
+    {
+      "name": "蓝",
+      "kind": "component",
+      "visible": true
+    }
+  ],
+  "allChannels": [
+    {
+      "index": 0,
+      "name": "红",
+      "kind": "component",
+      "visible": true
+    },
+    {
+      "index": 1,
+      "name": "绿",
+      "kind": "component",
+      "visible": true
+    },
+    {
+      "index": 2,
+      "name": "蓝",
+      "kind": "component",
+      "visible": true
+    }
+  ]
+}
+(index):73 [R2] V0a AFTER {
+  "label": "V0a AFTER",
+  "docId": 345,
+  "activeDocumentId": 342,
+  "activeChannels": "ERR:Unknown or unsupported active channels.",
+  "compositeChannels": [
+    {
+      "name": "红",
+      "kind": "component",
+      "visible": true
+    },
+    {
+      "name": "绿",
+      "kind": "component",
+      "visible": true
+    },
+    {
+      "name": "蓝",
+      "kind": "component",
+      "visible": true
+    }
+  ],
+  "componentChannels": [
+    {
+      "name": "红",
+      "kind": "component",
+      "visible": true
+    },
+    {
+      "name": "绿",
+      "kind": "component",
+      "visible": true
+    },
+    {
+      "name": "蓝",
+      "kind": "component",
+      "visible": true
+    }
+  ],
+  "allChannels": [
+    {
+      "index": 0,
+      "name": "红",
+      "kind": "component",
+      "visible": true
+    },
+    {
+      "index": 1,
+      "name": "绿",
+      "kind": "component",
+      "visible": true
+    },
+    {
+      "index": 2,
+      "name": "蓝",
+      "kind": "component",
+      "visible": true
+    }
+  ]
+}
+(index):73 [R2] [V0a] DOM activeChannels = compositeChannels（B 后台） => {
+  "before": "READ-ERROR",
+  "after": "READ-ERROR"
+}
+(index):73 [R2] V0b BEFORE {
+  "label": "V0b BEFORE",
+  "docId": 353,
+  "activeDocumentId": 350,
+  "activeChannels": "ERR:Unknown or unsupported active channels.",
+  "compositeChannels": [
+    {
+      "name": "红",
+      "kind": "component",
+      "visible": true
+    },
+    {
+      "name": "绿",
+      "kind": "component",
+      "visible": true
+    },
+    {
+      "name": "蓝",
+      "kind": "component",
+      "visible": true
+    }
+  ],
+  "componentChannels": [
+    {
+      "name": "红",
+      "kind": "component",
+      "visible": true
+    },
+    {
+      "name": "绿",
+      "kind": "component",
+      "visible": true
+    },
+    {
+      "name": "蓝",
+      "kind": "component",
+      "visible": true
+    }
+  ],
+  "allChannels": [
+    {
+      "index": 0,
+      "name": "红",
+      "kind": "component",
+      "visible": true
+    },
+    {
+      "index": 1,
+      "name": "绿",
+      "kind": "component",
+      "visible": true
+    },
+    {
+      "index": 2,
+      "name": "蓝",
+      "kind": "component",
+      "visible": true
+    }
+  ]
+}
+(index):73 [R2] V0b AFTER {
+  "label": "V0b AFTER",
+  "docId": 353,
+  "activeDocumentId": 350,
+  "activeChannels": "ERR:Unknown or unsupported active channels.",
+  "compositeChannels": [
+    {
+      "name": "红",
+      "kind": "component",
+      "visible": true
+    },
+    {
+      "name": "绿",
+      "kind": "component",
+      "visible": true
+    },
+    {
+      "name": "蓝",
+      "kind": "component",
+      "visible": true
+    }
+  ],
+  "componentChannels": [
+    {
+      "name": "红",
+      "kind": "component",
+      "visible": true
+    },
+    {
+      "name": "绿",
+      "kind": "component",
+      "visible": true
+    },
+    {
+      "name": "蓝",
+      "kind": "component",
+      "visible": true
+    }
+  ],
+  "allChannels": [
+    {
+      "index": 0,
+      "name": "红",
+      "kind": "component",
+      "visible": true
+    },
+    {
+      "index": 1,
+      "name": "绿",
+      "kind": "component",
+      "visible": true
+    },
+    {
+      "index": 2,
+      "name": "蓝",
+      "kind": "component",
+      "visible": true
+    }
+  ]
+}
+(index):73 [R2] [V0b] DOM activeChannels = componentChannels（B 后台） => {
+  "before": "READ-ERROR",
+  "after": "READ-ERROR"
+}
+(index):73 [R2] V1 BEFORE {
+  "label": "V1 BEFORE",
+  "docId": 361,
+  "activeDocumentId": 358,
+  "activeChannels": "ERR:Unknown or unsupported active channels.",
+  "compositeChannels": [
+    {
+      "name": "红",
+      "kind": "component",
+      "visible": true
+    },
+    {
+      "name": "绿",
+      "kind": "component",
+      "visible": true
+    },
+    {
+      "name": "蓝",
+      "kind": "component",
+      "visible": true
+    }
+  ],
+  "componentChannels": [
+    {
+      "name": "红",
+      "kind": "component",
+      "visible": true
+    },
+    {
+      "name": "绿",
+      "kind": "component",
+      "visible": true
+    },
+    {
+      "name": "蓝",
+      "kind": "component",
+      "visible": true
+    }
+  ],
+  "allChannels": [
+    {
+      "index": 0,
+      "name": "红",
+      "kind": "component",
+      "visible": true
+    },
+    {
+      "index": 1,
+      "name": "绿",
+      "kind": "component",
+      "visible": true
+    },
+    {
+      "index": 2,
+      "name": "蓝",
+      "kind": "component",
+      "visible": true
+    }
+  ]
+}
+(index):73 [R2] V1 AFTER B {
+  "label": "V1 AFTER B",
+  "docId": 361,
+  "activeDocumentId": 358,
+  "activeChannels": "ERR:Unknown or unsupported active channels.",
+  "compositeChannels": [
+    {
+      "name": "红",
+      "kind": "component",
+      "visible": true
+    },
+    {
+      "name": "绿",
+      "kind": "component",
+      "visible": true
+    },
+    {
+      "name": "蓝",
+      "kind": "component",
+      "visible": true
+    }
+  ],
+  "componentChannels": [
+    {
+      "name": "红",
+      "kind": "component",
+      "visible": true
+    },
+    {
+      "name": "绿",
+      "kind": "component",
+      "visible": true
+    },
+    {
+      "name": "蓝",
+      "kind": "component",
+      "visible": true
+    }
+  ],
+  "allChannels": [
+    {
+      "index": 0,
+      "name": "红",
+      "kind": "component",
+      "visible": true
+    },
+    {
+      "index": 1,
+      "name": "绿",
+      "kind": "component",
+      "visible": true
+    },
+    {
+      "index": 2,
+      "name": "蓝",
+      "kind": "component",
+      "visible": true
+    }
+  ]
+}
+(index):73 [R2] V1 AFTER A（用于判断命令是否落到激活文档） {
+  "label": "V1 AFTER A（用于判断命令是否落到激活文档）",
+  "docId": 358,
+  "activeDocumentId": 358,
+  "activeChannels": "ERR:Unknown or unsupported active channels.",
+  "compositeChannels": [
+    {
+      "name": "红",
+      "kind": "component",
+      "visible": true
+    },
+    {
+      "name": "绿",
+      "kind": "component",
+      "visible": true
+    },
+    {
+      "name": "蓝",
+      "kind": "component",
+      "visible": true
+    }
+  ],
+  "componentChannels": [
+    {
+      "name": "红",
+      "kind": "component",
+      "visible": true
+    },
+    {
+      "name": "绿",
+      "kind": "component",
+      "visible": true
+    },
+    {
+      "name": "蓝",
+      "kind": "component",
+      "visible": true
+    }
+  ],
+  "allChannels": [
+    {
+      "index": 0,
+      "name": "红",
+      "kind": "component",
+      "visible": true
+    },
+    {
+      "index": 1,
+      "name": "绿",
+      "kind": "component",
+      "visible": true
+    },
+    {
+      "index": 2,
+      "name": "蓝",
+      "kind": "component",
+      "visible": true
+    }
+  ]
+}
+(index):73 [R2] [V1] AM select：channel 在前、document 在后（B 后台） => {
+  "activeBefore": 358,
+  "runError": null,
+  "B": "READ-ERROR",
+  "A": "READ-ERROR"
+}
+(index):73 [R2] F0 BEFORE {
+  "label": "F0 BEFORE",
+  "docId": 369,
+  "activeDocumentId": 366,
+  "activeChannels": "ERR:Unknown or unsupported active channels.",
+  "compositeChannels": [
+    {
+      "name": "红",
+      "kind": "component",
+      "visible": true
+    },
+    {
+      "name": "绿",
+      "kind": "component",
+      "visible": true
+    },
+    {
+      "name": "蓝",
+      "kind": "component",
+      "visible": true
+    }
+  ],
+  "componentChannels": [
+    {
+      "name": "红",
+      "kind": "component",
+      "visible": true
+    },
+    {
+      "name": "绿",
+      "kind": "component",
+      "visible": true
+    },
+    {
+      "name": "蓝",
+      "kind": "component",
+      "visible": true
+    }
+  ],
+  "allChannels": [
+    {
+      "index": 0,
+      "name": "红",
+      "kind": "component",
+      "visible": true
+    },
+    {
+      "index": 1,
+      "name": "绿",
+      "kind": "component",
+      "visible": true
+    },
+    {
+      "index": 2,
+      "name": "蓝",
+      "kind": "component",
+      "visible": true
+    }
+  ]
+}
+(index):73 [R2] F0 WHILE B ACTIVE {
+  "label": "F0 WHILE B ACTIVE",
+  "docId": 369,
+  "activeDocumentId": 369,
+  "activeChannels": [
+    {
+      "name": "红",
+      "kind": "component",
+      "visible": true
+    },
+    {
+      "name": "绿",
+      "kind": "component",
+      "visible": true
+    },
+    {
+      "name": "蓝",
+      "kind": "component",
+      "visible": true
+    }
+  ],
+  "compositeChannels": [
+    {
+      "name": "红",
+      "kind": "component",
+      "visible": true
+    },
+    {
+      "name": "绿",
+      "kind": "component",
+      "visible": true
+    },
+    {
+      "name": "蓝",
+      "kind": "component",
+      "visible": true
+    }
+  ],
+  "componentChannels": [
+    {
+      "name": "红",
+      "kind": "component",
+      "visible": true
+    },
+    {
+      "name": "绿",
+      "kind": "component",
+      "visible": true
+    },
+    {
+      "name": "蓝",
+      "kind": "component",
+      "visible": true
+    }
+  ],
+  "allChannels": [
+    {
+      "index": 0,
+      "name": "红",
+      "kind": "component",
+      "visible": true
+    },
+    {
+      "index": 1,
+      "name": "绿",
+      "kind": "component",
+      "visible": true
+    },
+    {
+      "index": 2,
+      "name": "蓝",
+      "kind": "component",
+      "visible": true
+    }
+  ]
+}
+(index):73 [R2] [F0] 临时激活 B → DOM activeChannels = compositeChannels（控制组） => {
+  "activeBefore": 366,
+  "activeAfterSet": 369,
+  "activated": true,
+  "before": "READ-ERROR",
+  "whileActive": "NO-MASK"
+}
+(index):73 [R2] F1 BEFORE {
+  "label": "F1 BEFORE",
+  "docId": 377,
+  "activeDocumentId": 374,
+  "activeChannels": "ERR:Unknown or unsupported active channels.",
+  "compositeChannels": [
+    {
+      "name": "红",
+      "kind": "component",
+      "visible": true
+    },
+    {
+      "name": "绿",
+      "kind": "component",
+      "visible": true
+    },
+    {
+      "name": "蓝",
+      "kind": "component",
+      "visible": true
+    }
+  ],
+  "componentChannels": [
+    {
+      "name": "红",
+      "kind": "component",
+      "visible": true
+    },
+    {
+      "name": "绿",
+      "kind": "component",
+      "visible": true
+    },
+    {
+      "name": "蓝",
+      "kind": "component",
+      "visible": true
+    }
+  ],
+  "allChannels": [
+    {
+      "index": 0,
+      "name": "红",
+      "kind": "component",
+      "visible": true
+    },
+    {
+      "index": 1,
+      "name": "绿",
+      "kind": "component",
+      "visible": true
+    },
+    {
+      "index": 2,
+      "name": "蓝",
+      "kind": "component",
+      "visible": true
+    }
+  ]
+}
+(index):73 [R2] F1 WHILE B ACTIVE {
+  "label": "F1 WHILE B ACTIVE",
+  "docId": 377,
+  "activeDocumentId": 377,
+  "activeChannels": [
+    {
+      "name": "红",
+      "kind": "component",
+      "visible": true
+    },
+    {
+      "name": "绿",
+      "kind": "component",
+      "visible": true
+    },
+    {
+      "name": "蓝",
+      "kind": "component",
+      "visible": true
+    }
+  ],
+  "compositeChannels": [
+    {
+      "name": "红",
+      "kind": "component",
+      "visible": true
+    },
+    {
+      "name": "绿",
+      "kind": "component",
+      "visible": true
+    },
+    {
+      "name": "蓝",
+      "kind": "component",
+      "visible": true
+    }
+  ],
+  "componentChannels": [
+    {
+      "name": "红",
+      "kind": "component",
+      "visible": true
+    },
+    {
+      "name": "绿",
+      "kind": "component",
+      "visible": true
+    },
+    {
+      "name": "蓝",
+      "kind": "component",
+      "visible": true
+    }
+  ],
+  "allChannels": [
+    {
+      "index": 0,
+      "name": "红",
+      "kind": "component",
+      "visible": true
+    },
+    {
+      "index": 1,
+      "name": "绿",
+      "kind": "component",
+      "visible": true
+    },
+    {
+      "index": 2,
+      "name": "蓝",
+      "kind": "component",
+      "visible": true
+    }
+  ]
+}
+(index):73 [R2] F1 AFTER SWITCH BACK {
+  "label": "F1 AFTER SWITCH BACK",
+  "docId": 377,
+  "activeDocumentId": 374,
+  "activeChannels": "ERR:Unknown or unsupported active channels.",
+  "compositeChannels": [
+    {
+      "name": "红",
+      "kind": "component",
+      "visible": true
+    },
+    {
+      "name": "绿",
+      "kind": "component",
+      "visible": true
+    },
+    {
+      "name": "蓝",
+      "kind": "component",
+      "visible": true
+    }
+  ],
+  "componentChannels": [
+    {
+      "name": "红",
+      "kind": "component",
+      "visible": true
+    },
+    {
+      "name": "绿",
+      "kind": "component",
+      "visible": true
+    },
+    {
+      "name": "蓝",
+      "kind": "component",
+      "visible": true
+    }
+  ],
+  "allChannels": [
+    {
+      "index": 0,
+      "name": "红",
+      "kind": "component",
+      "visible": true
+    },
+    {
+      "index": 1,
+      "name": "绿",
+      "kind": "component",
+      "visible": true
+    },
+    {
+      "index": 2,
+      "name": "蓝",
+      "kind": "component",
+      "visible": true
+    }
+  ]
+}
+(index):73 [R2] [F1] 临时激活 B → 立刻 select RGB（无 document target）→ 检查 → 切回 => {
+  "activeBefore": 374,
+  "activeAfterSet": 377,
+  "activated": true,
+  "runError": null,
+  "before": "READ-ERROR",
+  "whileActive": "NO-MASK",
+  "afterBack": "READ-ERROR"
+}
+(index):73 [R2] F2 BEFORE {
+  "label": "F2 BEFORE",
+  "docId": 385,
+  "activeDocumentId": 382,
+  "activeChannels": "ERR:Unknown or unsupported active channels.",
+  "compositeChannels": [
+    {
+      "name": "红",
+      "kind": "component",
+      "visible": true
+    },
+    {
+      "name": "绿",
+      "kind": "component",
+      "visible": true
+    },
+    {
+      "name": "蓝",
+      "kind": "component",
+      "visible": true
+    }
+  ],
+  "componentChannels": [
+    {
+      "name": "红",
+      "kind": "component",
+      "visible": true
+    },
+    {
+      "name": "绿",
+      "kind": "component",
+      "visible": true
+    },
+    {
+      "name": "蓝",
+      "kind": "component",
+      "visible": true
+    }
+  ],
+  "allChannels": [
+    {
+      "index": 0,
+      "name": "红",
+      "kind": "component",
+      "visible": true
+    },
+    {
+      "index": 1,
+      "name": "绿",
+      "kind": "component",
+      "visible": true
+    },
+    {
+      "index": 2,
+      "name": "蓝",
+      "kind": "component",
+      "visible": true
+    }
+  ]
+}
+(index):73 [R2] F2 WHILE B ACTIVE {
+  "label": "F2 WHILE B ACTIVE",
+  "docId": 385,
+  "activeDocumentId": 385,
+  "activeChannels": [
+    {
+      "name": "红",
+      "kind": "component",
+      "visible": true
+    },
+    {
+      "name": "绿",
+      "kind": "component",
+      "visible": true
+    },
+    {
+      "name": "蓝",
+      "kind": "component",
+      "visible": true
+    }
+  ],
+  "compositeChannels": [
+    {
+      "name": "红",
+      "kind": "component",
+      "visible": true
+    },
+    {
+      "name": "绿",
+      "kind": "component",
+      "visible": true
+    },
+    {
+      "name": "蓝",
+      "kind": "component",
+      "visible": true
+    }
+  ],
+  "componentChannels": [
+    {
+      "name": "红",
+      "kind": "component",
+      "visible": true
+    },
+    {
+      "name": "绿",
+      "kind": "component",
+      "visible": true
+    },
+    {
+      "name": "蓝",
+      "kind": "component",
+      "visible": true
+    }
+  ],
+  "allChannels": [
+    {
+      "index": 0,
+      "name": "红",
+      "kind": "component",
+      "visible": true
+    },
+    {
+      "index": 1,
+      "name": "绿",
+      "kind": "component",
+      "visible": true
+    },
+    {
+      "index": 2,
+      "name": "蓝",
+      "kind": "component",
+      "visible": true
+    }
+  ]
+}
+(index):73 [R2] F2 AFTER SWITCH BACK {
+  "label": "F2 AFTER SWITCH BACK",
+  "docId": 385,
+  "activeDocumentId": 382,
+  "activeChannels": "ERR:Unknown or unsupported active channels.",
+  "compositeChannels": [
+    {
+      "name": "红",
+      "kind": "component",
+      "visible": true
+    },
+    {
+      "name": "绿",
+      "kind": "component",
+      "visible": true
+    },
+    {
+      "name": "蓝",
+      "kind": "component",
+      "visible": true
+    }
+  ],
+  "componentChannels": [
+    {
+      "name": "红",
+      "kind": "component",
+      "visible": true
+    },
+    {
+      "name": "绿",
+      "kind": "component",
+      "visible": true
+    },
+    {
+      "name": "蓝",
+      "kind": "component",
+      "visible": true
+    }
+  ],
+  "allChannels": [
+    {
+      "index": 0,
+      "name": "红",
+      "kind": "component",
+      "visible": true
+    },
+    {
+      "index": 1,
+      "name": "绿",
+      "kind": "component",
+      "visible": true
+    },
+    {
+      "index": 2,
+      "name": "蓝",
+      "kind": "component",
+      "visible": true
+    }
+  ]
+}
+(index):73 [R2] [F2] 临时激活 B → 等 50ms → select RGB → 检查 → 切回 => {
+  "activeBefore": 382,
+  "activeAfterSet": 385,
+  "activeAfterWait": 385,
+  "activated": true,
+  "runError": null,
+  "before": "READ-ERROR",
+  "whileActive": "NO-MASK",
+  "afterBack": "READ-ERROR"
+}
+(index):73 [R2] F3 BEFORE {
+  "label": "F3 BEFORE",
+  "docId": 393,
+  "activeDocumentId": 390,
+  "activeChannels": "ERR:Unknown or unsupported active channels.",
+  "compositeChannels": [
+    {
+      "name": "红",
+      "kind": "component",
+      "visible": true
+    },
+    {
+      "name": "绿",
+      "kind": "component",
+      "visible": true
+    },
+    {
+      "name": "蓝",
+      "kind": "component",
+      "visible": true
+    }
+  ],
+  "componentChannels": [
+    {
+      "name": "红",
+      "kind": "component",
+      "visible": true
+    },
+    {
+      "name": "绿",
+      "kind": "component",
+      "visible": true
+    },
+    {
+      "name": "蓝",
+      "kind": "component",
+      "visible": true
+    }
+  ],
+  "allChannels": [
+    {
+      "index": 0,
+      "name": "红",
+      "kind": "component",
+      "visible": true
+    },
+    {
+      "index": 1,
+      "name": "绿",
+      "kind": "component",
+      "visible": true
+    },
+    {
+      "index": 2,
+      "name": "蓝",
+      "kind": "component",
+      "visible": true
+    }
+  ]
+}
+(index):73 [R2] F3 WHILE B ACTIVE {
+  "label": "F3 WHILE B ACTIVE",
+  "docId": 393,
+  "activeDocumentId": 393,
+  "activeChannels": [
+    {
+      "name": "红",
+      "kind": "component",
+      "visible": true
+    },
+    {
+      "name": "绿",
+      "kind": "component",
+      "visible": true
+    },
+    {
+      "name": "蓝",
+      "kind": "component",
+      "visible": true
+    }
+  ],
+  "compositeChannels": [
+    {
+      "name": "红",
+      "kind": "component",
+      "visible": true
+    },
+    {
+      "name": "绿",
+      "kind": "component",
+      "visible": true
+    },
+    {
+      "name": "蓝",
+      "kind": "component",
+      "visible": true
+    }
+  ],
+  "componentChannels": [
+    {
+      "name": "红",
+      "kind": "component",
+      "visible": true
+    },
+    {
+      "name": "绿",
+      "kind": "component",
+      "visible": true
+    },
+    {
+      "name": "蓝",
+      "kind": "component",
+      "visible": true
+    }
+  ],
+  "allChannels": [
+    {
+      "index": 0,
+      "name": "红",
+      "kind": "component",
+      "visible": true
+    },
+    {
+      "index": 1,
+      "name": "绿",
+      "kind": "component",
+      "visible": true
+    },
+    {
+      "index": 2,
+      "name": "蓝",
+      "kind": "component",
+      "visible": true
+    }
+  ]
+}
+(index):73 [R2] F3 AFTER SWITCH BACK {
+  "label": "F3 AFTER SWITCH BACK",
+  "docId": 393,
+  "activeDocumentId": 390,
+  "activeChannels": "ERR:Unknown or unsupported active channels.",
+  "compositeChannels": [
+    {
+      "name": "红",
+      "kind": "component",
+      "visible": true
+    },
+    {
+      "name": "绿",
+      "kind": "component",
+      "visible": true
+    },
+    {
+      "name": "蓝",
+      "kind": "component",
+      "visible": true
+    }
+  ],
+  "componentChannels": [
+    {
+      "name": "红",
+      "kind": "component",
+      "visible": true
+    },
+    {
+      "name": "绿",
+      "kind": "component",
+      "visible": true
+    },
+    {
+      "name": "蓝",
+      "kind": "component",
+      "visible": true
+    }
+  ],
+  "allChannels": [
+    {
+      "index": 0,
+      "name": "红",
+      "kind": "component",
+      "visible": true
+    },
+    {
+      "index": 1,
+      "name": "绿",
+      "kind": "component",
+      "visible": true
+    },
+    {
+      "index": 2,
+      "name": "蓝",
+      "kind": "component",
+      "visible": true
+    }
+  ]
+}
+(index):73 [R2] [F3] 临时激活 B → redrawDocument → select RGB → 检查 → 切回 => {
+  "activeBefore": 390,
+  "runError": null,
+  "before": "READ-ERROR",
+  "whileActive": "NO-MASK",
+  "afterBack": "READ-ERROR"
+}
+(index):73 [R2] F4 BEFORE {
+  "label": "F4 BEFORE",
+  "docId": 401,
+  "activeDocumentId": 398,
+  "activeChannels": "ERR:Unknown or unsupported active channels.",
+  "compositeChannels": [
+    {
+      "name": "红",
+      "kind": "component",
+      "visible": true
+    },
+    {
+      "name": "绿",
+      "kind": "component",
+      "visible": true
+    },
+    {
+      "name": "蓝",
+      "kind": "component",
+      "visible": true
+    }
+  ],
+  "componentChannels": [
+    {
+      "name": "红",
+      "kind": "component",
+      "visible": true
+    },
+    {
+      "name": "绿",
+      "kind": "component",
+      "visible": true
+    },
+    {
+      "name": "蓝",
+      "kind": "component",
+      "visible": true
+    }
+  ],
+  "allChannels": [
+    {
+      "index": 0,
+      "name": "红",
+      "kind": "component",
+      "visible": true
+    },
+    {
+      "index": 1,
+      "name": "绿",
+      "kind": "component",
+      "visible": true
+    },
+    {
+      "index": 2,
+      "name": "蓝",
+      "kind": "component",
+      "visible": true
+    }
+  ]
+}
+(index):73 [R2] F4 WHILE B ACTIVE（等待 300ms 后） {
+  "label": "F4 WHILE B ACTIVE（等待 300ms 后）",
+  "docId": 401,
+  "activeDocumentId": 401,
+  "activeChannels": [
+    {
+      "name": "红",
+      "kind": "component",
+      "visible": true
+    },
+    {
+      "name": "绿",
+      "kind": "component",
+      "visible": true
+    },
+    {
+      "name": "蓝",
+      "kind": "component",
+      "visible": true
+    }
+  ],
+  "compositeChannels": [
+    {
+      "name": "红",
+      "kind": "component",
+      "visible": true
+    },
+    {
+      "name": "绿",
+      "kind": "component",
+      "visible": true
+    },
+    {
+      "name": "蓝",
+      "kind": "component",
+      "visible": true
+    }
+  ],
+  "componentChannels": [
+    {
+      "name": "红",
+      "kind": "component",
+      "visible": true
+    },
+    {
+      "name": "绿",
+      "kind": "component",
+      "visible": true
+    },
+    {
+      "name": "蓝",
+      "kind": "component",
+      "visible": true
+    }
+  ],
+  "allChannels": [
+    {
+      "index": 0,
+      "name": "红",
+      "kind": "component",
+      "visible": true
+    },
+    {
+      "index": 1,
+      "name": "绿",
+      "kind": "component",
+      "visible": true
+    },
+    {
+      "index": 2,
+      "name": "蓝",
+      "kind": "component",
+      "visible": true
+    }
+  ]
+}
+(index):73 [R2] F4 AFTER SWITCH BACK {
+  "label": "F4 AFTER SWITCH BACK",
+  "docId": 401,
+  "activeDocumentId": 398,
+  "activeChannels": "ERR:Unknown or unsupported active channels.",
+  "compositeChannels": [
+    {
+      "name": "红",
+      "kind": "component",
+      "visible": true
+    },
+    {
+      "name": "绿",
+      "kind": "component",
+      "visible": true
+    },
+    {
+      "name": "蓝",
+      "kind": "component",
+      "visible": true
+    }
+  ],
+  "componentChannels": [
+    {
+      "name": "红",
+      "kind": "component",
+      "visible": true
+    },
+    {
+      "name": "绿",
+      "kind": "component",
+      "visible": true
+    },
+    {
+      "name": "蓝",
+      "kind": "component",
+      "visible": true
+    }
+  ],
+  "allChannels": [
+    {
+      "index": 0,
+      "name": "红",
+      "kind": "component",
+      "visible": true
+    },
+    {
+      "index": 1,
+      "name": "绿",
+      "kind": "component",
+      "visible": true
+    },
+    {
+      "index": 2,
+      "name": "蓝",
+      "kind": "component",
+      "visible": true
+    }
+  ]
+}
+(index):73 [R2] [F4] 临时激活 B → batchPlay(sync:false) → 等 300ms → 检查 → 切回 => {
+  "activeBefore": 398,
+  "runError": null,
+  "returned": "[{}]",
+  "before": "READ-ERROR",
+  "whileActive": "NO-MASK",
+  "afterBack": "READ-ERROR"
+}
+(index):73 [R2] v2 变体结束（临时文档均已无保存关闭）
+(index):73 [R2] 已注册 select 监听：30 秒内请切换文档，观察 documentID 与 activeDocument.id 的对应关系
+(index):73 [R2] [EVT] select | descriptor={"_target":[{"_ref":"document","_offset":-1}],"documentID":59,"forceNotify":true,"_isCommand":false} | 回调时 activeDocument.id=59
+(index):73 [R2] [EVT] 回调内 executeAsModal 成功（空操作）
+(index):73 [R2] [EVT] select | descriptor={"_target":[{"_ref":"document","_offset":1}],"documentID":152,"forceNotify":true,"_isCommand":false} | 回调时 activeDocument.id=152
+(index):73 [R2] [EVT] select | descriptor={"_target":[{"_ref":"document","_offset":-1}],"documentID":59,"forceNotify":true,"_isCommand":false} | 回调时 activeDocument.id=59
+(index):73 [R2] [EVT] select | descriptor={"_target":[{"_ref":"document","_offset":1}],"documentID":152,"forceNotify":true,"_isCommand":false} | 回调时 activeDocument.id=152
+(index):73 [R2] select 监听已移除（30 秒到期）

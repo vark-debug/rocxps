@@ -1,0 +1,8 @@
+# UXP Hybrid addon 是裸 Mach-O/PE 二进制，禁止任何换行符转换
+*.uxpaddon binary
+*.dylib binary
+*.dll binary
+
+# 构建/运行脚本统一 LF
+*.sh text eol=lf
+*.command text eol=lf

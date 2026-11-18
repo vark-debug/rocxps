@@ -1,0 +1,348 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>AI 局部重绘 · 主面板布局草稿（C 方案）</title>
+<style>
+  :root {
+    --bg: #141414;
+    --panel: #323232;
+    --panel-2: #2a2a2a;
+    --line: #4a4a4a;
+    --line-soft: #3d3d3d;
+    --text: #e8e8e8;
+    --sub: #9a9a9a;
+    --accent: #4a8cff;
+    --warn: #d8a219;
+    --ok: #4caf7d;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 26px 30px 40px;
+    background: var(--bg);
+    color: var(--text);
+    font: 13px/1.5 -apple-system, "PingFang SC", system-ui, sans-serif;
+  }
+  h1 { font-size: 16px; font-weight: 600; margin: 0 0 6px; }
+  .lead { margin: 0 0 18px; font-size: 12px; color: var(--sub); }
+  .lead b { color: var(--text); font-weight: 500; }
+
+  .notice {
+    max-width: 1040px;
+    margin: 0 0 24px;
+    padding: 8px 10px;
+    border: 1px solid #3f4a5f;
+    border-left: 3px solid var(--accent);
+    border-radius: 4px;
+    background: #1b2029;
+    font-size: 12px;
+    color: #c7d2e0;
+  }
+  .notice b { color: #e8eef8; }
+
+  .stage { display: flex; gap: 34px; align-items: flex-start; flex-wrap: wrap; }
+  .frame-wrap { display: flex; flex-direction: column; gap: 8px; }
+  .frame-cap { font-size: 11px; color: var(--sub); max-width: 330px; }
+  .frame-cap b { color: var(--text); font-weight: 500; }
+
+  .frame {
+    width: 330px;
+    background: var(--panel);
+    border: 1px solid #000;
+    border-radius: 8px;
+    overflow: hidden;
+    box-shadow: 0 12px 34px rgba(0, 0, 0, 0.55);
+    display: flex;
+    flex-direction: column;
+  }
+  .panel { display: flex; flex-direction: column; flex: 1; min-height: 0; padding: 8px; }
+
+  /* ---------- 顶栏：28px ---------- */
+  .topbar { display: flex; align-items: center; justify-content: space-between; height: 28px; flex: none; margin-bottom: 6px; }
+  .title { font-size: 12px; font-weight: 600; letter-spacing: .2px; }
+  .link { font-size: 11px; color: var(--sub); }
+
+  /* ---------- 编辑区：展开态固定 212px ---------- */
+  .editor {
+    height: 212px;
+    flex: none;
+    display: flex;
+    flex-direction: column;
+    background: var(--panel-2);
+    border: 1px solid var(--line-soft);
+    border-radius: 6px;
+    padding: 8px;
+    margin-bottom: 6px;
+  }
+  /* 折叠态：队列让出的高度全给编辑区，提示词框变高，不留空白 */
+  .editor--grow { height: auto; flex: 1; min-height: 0; }
+
+  .lbl { font-size: 10px; color: var(--sub); flex: none; margin-bottom: 3px; }
+  .ta {
+    flex: 1;
+    min-height: 44px;
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    background: #262626;
+    padding: 6px 7px;
+    font-size: 12px;
+    color: #7d7d7d;
+    overflow: hidden;
+    margin-bottom: 5px;
+  }
+  .ta .caret { display: inline-block; width: 1px; height: 12px; background: var(--accent); vertical-align: -2px; margin-left: 2px; }
+
+  .chips { display: flex; flex-wrap: wrap; gap: 4px; flex: none; margin-bottom: 5px; }
+  .chip {
+    height: 20px; line-height: 18px;
+    padding: 0 7px;
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    font-size: 10px;
+    color: #cfcfcf;
+    background: #303030;
+  }
+
+  .row { display: flex; gap: 6px; flex: none; margin-bottom: 5px; }
+  .btn {
+    height: 26px;
+    line-height: 26px;
+    padding: 0 9px;
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    background: #3a3a3a;
+    color: var(--text);
+    font-size: 11px;
+    text-align: center;
+    white-space: nowrap;
+  }
+  .btn--sel { flex: 0 0 74px; color: #d8d8d8; }
+  .btn--primary { flex: 1; background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 500; }
+
+  .status { display: flex; align-items: center; gap: 7px; height: 38px; flex: none; }
+  .thumb {
+    width: 32px; height: 32px; flex: none;
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    background:
+      linear-gradient(45deg, #555 25%, transparent 25%) 0 0 / 8px 8px,
+      linear-gradient(-45deg, #555 25%, transparent 25%) 0 4px / 8px 8px,
+      linear-gradient(45deg, transparent 75%, #555 75%) 4px -4px / 8px 8px,
+      linear-gradient(-45deg, transparent 75%, #555 75%) -4px 0 / 8px 8px,
+      #222;
+  }
+  .status__text { flex: 1; min-width: 0; font-size: 10px; color: var(--sub); line-height: 14px; }
+  .status__text em { font-style: normal; color: #777; }
+  .chev { flex: none; font-size: 10px; color: #8a8a8a; }
+
+  /* ---------- 队列区：展开态 flex:1 ---------- */
+  .queue { flex: 1; min-height: 26px; display: flex; flex-direction: column; min-width: 0; }
+  .queue--collapsed { flex: none; }
+  .qhead {
+    display: flex; align-items: center; justify-content: space-between;
+    height: 26px; flex: none;
+    padding: 0 2px;
+  }
+  .qhead__l { font-size: 11px; color: #d0d0d0; }
+  .qhead__l b { color: #fff; font-weight: 600; }
+  .qhead__r { display: flex; align-items: center; gap: 9px; font-size: 10px; color: var(--sub); }
+  .qhead__r .collapse { color: #b9b9b9; }
+
+  .qlist {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    border-top: 1px solid var(--line-soft);
+    padding-top: 5px;
+  }
+  .qlist::-webkit-scrollbar { width: 5px; }
+  .qlist::-webkit-scrollbar-thumb { background: #555; border-radius: 3px; }
+
+  .card {
+    display: flex; align-items: center; gap: 7px;
+    border: 1px solid var(--line-soft);
+    border-radius: 4px;
+    padding: 5px 6px;
+    margin-bottom: 5px;
+    background: #2e2e2e;
+  }
+  .card__thumb { width: 30px; height: 30px; flex: none; border-radius: 3px; border: 1px solid var(--line); background: #222; }
+  .card__main { flex: 1; min-width: 0; }
+  .card__prompt { font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .card__meta { font-size: 9px; color: var(--sub); display: flex; gap: 5px; margin-top: 2px; }
+  .badge { border: 1px solid var(--line); border-radius: 3px; padding: 0 4px; font-size: 9px; line-height: 12px; }
+  .badge--run { color: #7fb0ff; border-color: #3a5a8c; }
+  .badge--wait { color: var(--warn); border-color: #6a5214; }
+  .badge--done { color: var(--ok); border-color: #2f6a4f; }
+  .card__act { flex: none; font-size: 10px; color: #9a9a9a; }
+
+  /* ---------- 备注 ---------- */
+  .notes { margin-top: 34px; max-width: 1040px; }
+  .notes h2 { font-size: 13px; font-weight: 600; margin: 22px 0 10px; }
+  .notes h2:first-child { margin-top: 0; }
+  .notes table { border-collapse: collapse; width: 100%; font-size: 12px; }
+  .notes th, .notes td { border-bottom: 1px solid #2b2b2b; padding: 6px 10px 6px 0; text-align: left; vertical-align: top; }
+  .notes th { color: var(--sub); font-weight: 500; font-size: 11px; }
+  .notes td:first-child { width: 190px; color: #cfcfcf; }
+  .notes code { color: #c9c9c9; background: #232323; padding: 0 4px; border-radius: 3px; font-size: 11px; }
+  .notes .old { color: #777; }
+  .behaviors { margin: 0; padding-left: 18px; font-size: 12px; color: #c9c9c9; }
+  .behaviors li { margin-bottom: 6px; }
+</style>
+</head>
+<body>
+  <h1>AI 局部重绘 · 主面板布局草稿（C 方案）</h1>
+  <p class="lead">编辑区<b>固定 212px</b>（紧凑），队列区 <b>flex:1</b> 吃满剩余高度并可完全折叠；面板基准宽度 330px，字号整体下调一档。</p>
+
+  <div class="notice">
+    <b>关于「折叠队列后插件窗口自动变矮」：做不到。</b>
+    Photoshop UXP 的面板高度由宿主（Photoshop / 用户拖拽）控制，插件没有可编程改窗口尺寸的 API，
+    所以折叠不会自动收缩窗口。替代做法：折叠后把腾出的高度<b>全部给编辑区</b>（提示词框变高），
+    同时折叠态内容最小高度约 280px，用户手动把窗口拖到约 300px 即可（已等于 manifest 的下限）。
+  </div>
+
+  <div class="stage">
+    <!-- C1：展开态 -->
+    <div class="frame-wrap">
+      <div class="frame" style="height: 460px">
+        <div class="panel">
+          <div class="topbar">
+            <span class="title">AI 局部重绘</span>
+            <span class="link">设置</span>
+          </div>
+
+          <div class="editor">
+            <div class="lbl">提示词</div>
+            <div class="ta">描述想把选区改成什么，例如：把草地换成雪地<span class="caret"></span></div>
+            <div class="chips">
+              <span class="chip">换雪地</span><span class="chip">补全画面</span><span class="chip">去物体</span>
+              <span class="chip">赛博风</span><span class="chip">水彩</span><span class="chip">高清修复</span>
+            </div>
+            <div class="row">
+              <button class="btn">抓取选区</button>
+              <button class="btn btn--sel">重绘 ▾</button>
+              <button class="btn btn--primary">加入队列</button>
+            </div>
+            <div class="status">
+              <span class="thumb"></span>
+              <span class="status__text">已抓取 1024×768 · 图层“天空”<br><em>抠图 → 生成 → 贴回</em></span>
+              <span class="chev">详情 ›</span>
+            </div>
+          </div>
+
+          <div class="queue">
+            <div class="qhead">
+              <span class="qhead__l">任务队列 <b>3</b></span>
+              <span class="qhead__r"><span>清空已完成</span><span class="collapse">⌄ 收起</span></span>
+            </div>
+            <div class="qlist">
+              <div class="card">
+                <span class="card__thumb"></span>
+                <span class="card__main">
+                  <div class="card__prompt">把草地换成雪地</div>
+                  <div class="card__meta"><span class="badge badge--run">生成中</span><span>Seedream 4.0</span><span>0:24</span></div>
+                </span>
+                <span class="card__act">取消</span>
+              </div>
+              <div class="card">
+                <span class="card__thumb"></span>
+                <span class="card__main">
+                  <div class="card__prompt">去掉画面右侧的路人</div>
+                  <div class="card__meta"><span class="badge badge--wait">等待中</span><span>Qwen 编辑</span><span>第 2 位</span></div>
+                </span>
+                <span class="card__act">取消</span>
+              </div>
+              <div class="card">
+                <span class="card__thumb"></span>
+                <span class="card__main">
+                  <div class="card__prompt">整体提亮并加一点暖色滤镜</div>
+                  <div class="card__meta"><span class="badge badge--done">已贴回</span><span>图层“天空·重绘”</span></div>
+                </span>
+                <span class="card__act">重试</span>
+              </div>
+              <div class="card">
+                <span class="card__thumb"></span>
+                <span class="card__main">
+                  <div class="card__prompt">给建筑加霓虹灯招牌</div>
+                  <div class="card__meta"><span class="badge badge--done">已贴回</span><span>图层“霓虹”</span></div>
+                </span>
+                <span class="card__act">重试</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="frame-cap"><b>C1 · 展开态</b> 330×460：编辑区 212px 固定；队列在下方 <code>flex:1</code> 滚动</div>
+    </div>
+
+    <!-- C2：折叠态 -->
+    <div class="frame-wrap">
+      <div class="frame" style="height: 460px">
+        <div class="panel">
+          <div class="topbar">
+            <span class="title">AI 局部重绘</span>
+            <span class="link">设置</span>
+          </div>
+
+          <div class="editor editor--grow">
+            <div class="lbl">提示词</div>
+            <div class="ta" style="min-height: 220px">描述想把选区改成什么，例如：把草地换成雪地<span class="caret"></span></div>
+            <div class="chips">
+              <span class="chip">换雪地</span><span class="chip">补全画面</span><span class="chip">去物体</span>
+              <span class="chip">赛博风</span><span class="chip">水彩</span><span class="chip">高清修复</span>
+            </div>
+            <div class="row">
+              <button class="btn">抓取选区</button>
+              <button class="btn btn--sel">重绘 ▾</button>
+              <button class="btn btn--primary">加入队列</button>
+            </div>
+            <div class="status">
+              <span class="thumb"></span>
+              <span class="status__text">已抓取 1024×768 · 图层“天空”<br><em>抠图 → 生成 → 贴回</em></span>
+              <span class="chev">详情 ›</span>
+            </div>
+          </div>
+
+          <div class="queue queue--collapsed">
+            <div class="qhead">
+              <span class="qhead__l">任务队列 <b>3</b> · 1 个进行中</span>
+              <span class="qhead__r"><span class="collapse">⌃ 展开</span></span>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="frame-cap"><b>C2 · 队列折叠</b> 高度不变，编辑区吃掉腾出的空间（提示词框变高），不留空白</div>
+    </div>
+  </div>
+
+  <div class="notes">
+    <h2>尺寸 / 字号对照（改 index.scss）</h2>
+    <table>
+      <thead><tr><th>元素</th><th>现在</th><th>改为</th></tr></thead>
+      <tbody>
+        <tr><td>面板内边距 <code>#app</code></td><td>10px</td><td>8px</td></tr>
+        <tr><td>区块间距</td><td>10px</td><td>6px（模板/操作行 5px）</td></tr>
+        <tr><td>标题 <code>sp-heading size="M"</code></td><td>≈18px，行高偏高</td><td>12px / 600，整行 28px</td></tr>
+        <tr><td>提示词框</td><td><code>flex:1</code> + <code>min-height:88px</code>，高度随窗口乱涨</td><td>编辑区固定 212px 内 <code>flex:1</code>，<code>min-height:44px</code></td></tr>
+        <tr><td>模板按钮</td><td>Spectrum 默认尺寸（约 28~30px）</td><td>20px 高、10px 字，两行排布（6 个不隐藏）</td></tr>
+        <tr><td>抓取 / 模式 / 加入队列</td><td>约 30px</td><td>26px 高、11px 字</td></tr>
+        <tr><td>选区预览</td><td>140px 大图 + 多行尺寸文字</td><td>32px 缩略图 + 两行文字 + 「详情 ›」</td></tr>
+        <tr><td>队列列表</td><td><code>height:240px</code> 写死</td><td><code>flex:1</code> + <code>min-height:0</code> + <code>overflow-y:auto</code></td></tr>
+        <tr><td>队列标题栏</td><td>无折叠开关</td><td>常驻 26px：左「任务队列 N」，右「清空已完成」+「收起/展开」</td></tr>
+        <tr><td>队列卡片</td><td>36px 缩略图 + 3~4 行，约 52~60px</td><td>30px 缩略图 + 单行提示词 + 单行元信息，约 44px</td></tr>
+      </tbody>
+    </table>
+
+    <h2>交互规则</h2>
+    <ul class="behaviors">
+      <li>编辑区高度固定（212px），窗口变矮时只压队列列表，编辑区不被压扁。</li>
+      <li>队列折叠状态持久化（settings 里存一个 <code>queueCollapsed</code> 布尔值），下次打开保持。</li>
+      <li>折叠后编辑区 <code>flex:1</code> 吃掉剩余高度；展开时恢复 212px 固定。</li>
+      <li>队列标题栏常驻：折叠时也显示总数与「N 个进行中」，点击整行即可展开。</li>
+      <li>模板按钮渲染的是设置里的 <code>promptTemplates</code>（固定 6 槽，可改名/改提示词/绑定服务商），空槽不渲染。</li>
+      <li>「详情 ›」打开轻量弹层看大图与外扩等完整信息；设置面板本次同步压缩（字段间距 16→12px、标签 13→12px）。</li>
+    </ul>
+  </div>
+</body>
+</html>
