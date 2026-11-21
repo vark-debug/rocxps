@@ -1,4 +1,5 @@
-import type { ExpandedRegion } from "./types";
+import type { ExpandedRegion, Rect } from "./types";
+import type { PadPercent } from "./expandPlan";
 
 /** 输出尺寸贴合计划（纯计算；贴回几何一律按实际输出尺寸缩放）。 */
 export interface OutputFitPlan {
@@ -195,4 +196,81 @@ export const composeCanvasMask = (
     out.set(mask.subarray(srcRow, srcRow + copyW), y * canvasWidth + x0);
   }
   return out;
+};
+
+/** 阔图贴回几何：结果 = 逻辑输出画布（源图按 pad 外扩后的整体）。 */
+export interface ExpandPlaceGeometry {
+  /** 结果数据中裁掉的画布外部分（左/上越界时 > 0）。 */
+  srcLeft: number;
+  srcTop: number;
+  /** 画布内实际写入位置（文档像素坐标）。 */
+  targetLeft: number;
+  targetTop: number;
+  /** 画布内实际写入尺寸（越界裁剪后，≥1）。 */
+  outW: number;
+  outH: number;
+  /** 逻辑输出画布尺寸（源图 × (1 + pad%)，缩放目标）。 */
+  logicalWidth: number;
+  logicalHeight: number;
+}
+
+/**
+ * 阔图贴回几何（纯函数，Node 可单测）。
+ *
+ * expand 结果覆盖整张逻辑输出画布（源图 + 四边生成内容），没有蒙版与补边，
+ * 只需处理画布越界：目标位置 = 源图包围盒按 pad 反向外推；越出画布的部分
+ * 裁掉（srcLeft/srcTop 记录数据中的裁剪起点）。逻辑尺寸与 computeExpandPads
+ * 的 logicalWidth/Height 同式，缩放比偏差 ≤ 数十像素，由等比缩放消化。
+ */
+export const computeExpandPlaceGeometry = (
+  canvasWidth: number,
+  canvasHeight: number,
+  source: Rect,
+  pads: PadPercent,
+): ExpandPlaceGeometry => {
+  const sw = Math.round(source.right - source.left);
+  const sh = Math.round(source.bottom - source.top);
+  if (!(sw > 0) || !(sh > 0)) {
+    throw new Error("扩图贴回：源图包围盒为空");
+  }
+  if (!(canvasWidth > 0) || !(canvasHeight > 0)) {
+    throw new Error("扩图贴回：画布尺寸非法");
+  }
+  for (const value of [pads.left, pads.right, pads.top, pads.bottom]) {
+    if (!Number.isFinite(value) || value < 0) {
+      throw new Error("扩图贴回：pad 百分比非法");
+    }
+  }
+
+  const logicalWidth = Math.round(sw * (1 + (pads.left + pads.right) / 100));
+  const logicalHeight = Math.round(sh * (1 + (pads.top + pads.bottom) / 100));
+
+  let targetLeft = source.left - Math.round((pads.left / 100) * sw);
+  let targetTop = source.top - Math.round((pads.top / 100) * sh);
+  let srcLeft = 0;
+  let srcTop = 0;
+  if (targetLeft < 0) {
+    srcLeft = -targetLeft;
+    targetLeft = 0;
+  }
+  if (targetTop < 0) {
+    srcTop = -targetTop;
+    targetTop = 0;
+  }
+
+  const outW = Math.min(logicalWidth - srcLeft, canvasWidth - targetLeft);
+  const outH = Math.min(logicalHeight - srcTop, canvasHeight - targetTop);
+  if (!(outW > 0) || !(outH > 0)) {
+    throw new Error("扩图贴回：结果与画布无交集");
+  }
+  return {
+    srcLeft,
+    srcTop,
+    targetLeft,
+    targetTop,
+    outW,
+    outH,
+    logicalWidth,
+    logicalHeight,
+  };
 };

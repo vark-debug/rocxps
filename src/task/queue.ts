@@ -5,6 +5,7 @@ import type {
   ProviderProgress,
 } from "../providers/types";
 import type { SizeMode } from "../ps/presetFit";
+import type { PanelWorkflow, PadPercent } from "../ps/expandPlan";
 import type { PlaceBackMode, RedrawSettings } from "../settings/types";
 
 /**
@@ -60,9 +61,15 @@ export interface QueueJob {
   presetId?: string | null;
   sendWidth: number;
   sendHeight: number;
-  /** 实际请求尺寸（预设模式 = send；custom = 换算结果）。 */
+  /** 实际请求尺寸（预设模式 = send；custom = 换算结果；expand = 逻辑输出画布）。 */
   reqW: number;
   reqH: number;
+  /** 主面板工作流；旧队列项缺省按 selection（框选局部重绘）。 */
+  workflow?: PanelWorkflow;
+  /** expand 任务入队时的四边 pad 快照（百分比，clamp 后），展示 / 贴回兜底用。 */
+  expandPads?: PadPercent;
+  /** expand 任务的采样长边上限（已归一化）；缺省走 CLI 默认。 */
+  expandMaxSample?: number;
 
   // ---- 落盘路径（队列项只持路径） ----
   refPath: string;

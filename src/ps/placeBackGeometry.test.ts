@@ -1,7 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 
-import { computePlaceGeometry, composeCanvasMask, cropPlane } from "./placeBackGeometry";
+import { computeExpandPlaceGeometry, computePlaceGeometry, composeCanvasMask, cropPlane } from "./placeBackGeometry";
 import { expandRectToMultiple } from "./geometry";
 import { CAPTURE_ALIGN } from "./align";
 import type { ExpandedRegion, Rect } from "./types";
@@ -297,5 +297,90 @@ describe("composeCanvasMask", () => {
     assert.throws(() => composeCanvasMask(0, 5, new Uint8Array(4), 2, 2, 0, 0));
     assert.throws(() => composeCanvasMask(5, 5, new Uint8Array(3), 2, 2, 0, 0));
     assert.throws(() => composeCanvasMask(5, 5, new Uint8Array(4), 3, 2, 0, 0));
+  });
+});
+
+describe("computeExpandPlaceGeometry（阔图贴回几何）", () => {
+  const pads = (l: number, t: number, r: number, b: number) => ({
+    left: l,
+    top: t,
+    right: r,
+    bottom: b,
+  });
+
+  it("无越界：逻辑画布完整覆盖目标画布", () => {
+    // 源图 800×700，画布 1200×900，pad = 25%/14.29%（由 computeExpandPads 圆整后的值）
+    const g = computeExpandPlaceGeometry(
+      1200,
+      900,
+      rect(200, 100, 1000, 800),
+      pads(25, 14.29, 25, 14.29),
+    );
+    assert.equal(g.logicalWidth, 1200);
+    assert.equal(g.logicalHeight, 900);
+    assert.deepEqual(
+      { srcLeft: g.srcLeft, srcTop: g.srcTop, targetLeft: g.targetLeft, targetTop: g.targetTop, outW: g.outW, outH: g.outH },
+      { srcLeft: 0, srcTop: 0, targetLeft: 0, targetTop: 0, outW: 1200, outH: 900 },
+    );
+  });
+
+  it("左侧越界：裁掉画布外部分并平移裁剪起点", () => {
+    // 源图 500×400 在画布 600×400 内贴近左侧，pad left=200% → 外推 1000，target=-950
+    const g = computeExpandPlaceGeometry(
+      600,
+      400,
+      rect(50, 0, 550, 400),
+      pads(200, 0, 0, 0),
+    );
+    assert.equal(g.logicalWidth, 1500);
+    assert.equal(g.srcLeft, 950);
+    assert.equal(g.targetLeft, 0);
+    assert.equal(g.targetTop, 0);
+    // 逻辑画布在文档坐标中只覆盖到 x=550（-950+1500），画布右侧 50px 不被覆盖
+    assert.equal(g.outW, 550);
+    assert.equal(g.outH, 400);
+  });
+
+  it("右侧越界：写入宽度被画布截断", () => {
+    // 源图 400×300 贴左上，pad right=100% → 逻辑宽 800，画布宽 500
+    const g = computeExpandPlaceGeometry(
+      500,
+      300,
+      rect(0, 0, 400, 300),
+      pads(0, 0, 100, 0),
+    );
+    assert.equal(g.logicalWidth, 800);
+    assert.equal(g.srcLeft, 0);
+    assert.equal(g.targetLeft, 0);
+    assert.equal(g.outW, 500);
+    assert.equal(g.outH, 300);
+  });
+
+  it("顶部越界与底部截断同时发生", () => {
+    // 源图 300×300，top=150，pad top=100% → 外推 300 → targetTop=-150
+    const g = computeExpandPlaceGeometry(
+      300,
+      400,
+      rect(0, 150, 300, 450),
+      pads(0, 100, 0, 0),
+    );
+    assert.equal(g.srcTop, 150);
+    assert.equal(g.targetTop, 0);
+    assert.equal(g.outH, 400);
+  });
+
+  it("源图为空 / pad 负数 / 无交集抛错", () => {
+    assert.throws(
+      () => computeExpandPlaceGeometry(600, 400, rect(10, 0, 10, 100), pads(0, 0, 0, 0)),
+      /为空/,
+    );
+    assert.throws(
+      () => computeExpandPlaceGeometry(600, 400, rect(0, 0, 100, 100), pads(-1, 0, 0, 0)),
+      /非法/,
+    );
+    assert.throws(
+      () => computeExpandPlaceGeometry(0, 400, rect(0, 0, 100, 100), pads(0, 0, 0, 0)),
+      /非法/,
+    );
   });
 });

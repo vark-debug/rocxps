@@ -7,6 +7,8 @@
  * - 插件侧再按 1MP 上限收敛（与 catalog 的 maxPixels 一致），避免编辑区过大。
  */
 
+import { formatPadArg, type PadPercent } from "../ps/expandPlan";
+
 export const SILICONED_ALIGN = 32;
 export const SILICONED_MIN_SIDE = 512;
 export const SILICONED_MAX_PIXELS = 1048576;
@@ -184,3 +186,56 @@ export const buildSiliconAddArgs = (input: BuildAddArgsInput): string[] => [
   escapeSiliconPrompt(input.prompt),
   String(input.seed),
 ];
+
+export interface BuildExpandAddArgsInput {
+  /** 源图（非透明包围盒裁剪出的 PNG），输出画布按 --pad 由它向外扩。 */
+  imagePath: string;
+  /** 补充提示词，可空：工作流固定句子在前，此参数作为补充拼在其后。 */
+  prompt: string;
+  /** clamp 后的四边 pad 百分比（computeExpandPads.pads）。 */
+  pads: PadPercent;
+  /** 采样长边上限（已归一化，1024–3840 步进 128）；缺省不传，走 CLI 默认 2048。 */
+  maxSample?: number;
+}
+
+/**
+ * silicontrol add 参数（expand 工作流）：
+ * - `--mode expand`：无 `--mask`（传了会被拒绝），画布向外扩、原图贴回大画布内部；
+ * - `--pad L,R,T,B`：四边外扩百分比，由 computeExpandPads 从「源图包围盒 + 扩展画布」算出；
+ * - 不传显式格式 / `--strength` / `--ref` / `--grid`：CLI 会拒绝，画布由 pad 决定；
+ * - 提示词是位置参数且可空（工作流固定句子的补充），同样做 {a|b} 转义保证单任务；
+ * - 模型沿用 qwen-image-2.1（expand LoRA 预设仅该模型提供）。
+ */
+export const buildSiliconExpandAddArgs = (
+  input: BuildExpandAddArgsInput,
+): string[] => [
+  "add",
+  "--model",
+  "qwen-image-2.1",
+  "--mode",
+  "expand",
+  "--image",
+  input.imagePath,
+  "--pad",
+  formatPadArg(input.pads),
+  ...(input.maxSample ? ["--max-sample", String(input.maxSample)] : []),
+  escapeSiliconPrompt(input.prompt),
+];
+
+/**
+ * 识别「旧版 silicontrol 不支持 expand」的拒单，翻译为可操作的提示。
+ *
+ * CLI 在进入队列前完成全部参数校验：旧版把 `--mode` / `--pad` / `--max-sample`
+ * 当未知选项拒绝（退出码 2，code "usage"）。命中时返回中文指引，未命中返回
+ * null（原错误原样上抛，保留 pad 非法等新 CLI 自身 usage 错误的原始信息）。
+ */
+export const describeSiliconExpandRejection = (
+  message: string,
+  code?: string,
+): string | null => {
+  const usageLike =
+    code === "usage" ||
+    /unknown option|unknown flag|unexpected argument|usage:/i.test(message);
+  if (!usageLike) return null;
+  return `Siliconed 版本过旧：当前 silicontrol 不支持扩图（--mode expand），请升级 Siliconed 后重试。原始错误：${message.split("\n").slice(-1)[0] || message}`;
+};

@@ -1,4 +1,8 @@
 import { useEffect, useState, type ReactNode } from "react";
+import {
+  EXPAND_MAX_SAMPLE_DEFAULT,
+  normalizeExpandMaxSample,
+} from "../ps/expandPlan";
 import { maskApiKey } from "../ark/client";
 import { siliconMacs } from "../core/silicontrol";
 import { probeProvider } from "../providers";
@@ -498,6 +502,22 @@ export const SettingsPanel = () => {
             onChange={(v) => draft({ siliconedCliPath: v })}
             onCommit={(v) => patch({ siliconedCliPath: v })}
           />
+          <TextField
+            label="扩图采样长边上限"
+            value={String(settings.expandMaxSample)}
+            placeholder="2048"
+            onChange={(v) =>
+              draft({
+                expandMaxSample: Number(v) > 0 ? Number(v) : EXPAND_MAX_SAMPLE_DEFAULT,
+              })
+            }
+            onCommit={(v) =>
+              patch({ expandMaxSample: normalizeExpandMaxSample(Number(v)) })
+            }
+          />
+          <p className="settings-panel__hint">
+            扩图（--mode expand）的采样长边上限：1024–3840，步进 128；越低越快，越高细节越多。
+          </p>
 
           {/* ---------- 跨机渲染（0.20 的 macs / compute） ---------- */}
           <div className="settings-panel__field">

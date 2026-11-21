@@ -3,6 +3,8 @@ import assert from "node:assert/strict";
 
 import {
   buildSiliconAddArgs,
+  buildSiliconExpandAddArgs,
+  describeSiliconExpandRejection,
   describeSiliconPatchRejection,
   detectSiliconMode,
   escapeSiliconPrompt,
@@ -223,5 +225,91 @@ describe("describeSiliconPatchRejection（patch 拒单翻译）", () => {
   it("无关报错返回 null（调用方原样抛出）", () => {
     assert.equal(describeSiliconPatchRejection("Siliconed 未返回任务编号（job）"), null);
     assert.equal(describeSiliconPatchRejection(""), null);
+  });
+});
+
+describe("buildSiliconExpandAddArgs（expand 工作流参数）", () => {
+  it("按 CLI 规格拼装：--mode expand，无 --mask，pad 为 L,R,T,B", () => {
+    const args = buildSiliconExpandAddArgs({
+      imagePath: "/tmp/expand/ref.png",
+      prompt: "把天空换成晚霞",
+      pads: { left: 30, top: 12.5, right: 33.333, bottom: 0 },
+    });
+    assert.deepEqual(args, [
+      "add",
+      "--model",
+      "qwen-image-2.1",
+      "--mode",
+      "expand",
+      "--image",
+      "/tmp/expand/ref.png",
+      "--pad",
+      "30.00,33.33,12.50,0.00",
+      "把天空换成晚霞",
+    ]);
+  });
+
+  it("空提示词：位置参数原样传递（调用方负责 trim），不传 --max-sample", () => {
+    const args = buildSiliconExpandAddArgs({
+      imagePath: "/tmp/ref.png",
+      prompt: "  ",
+      pads: { left: 25, top: 0, right: 25, bottom: 0 },
+    });
+    assert.equal(args[args.length - 1], "  ");
+    assert.ok(!args.includes("--max-sample"));
+    assert.ok(!args.includes("--mask"));
+  });
+
+  it("maxSample 存在时输出 --max-sample 参数", () => {
+    const args = buildSiliconExpandAddArgs({
+      imagePath: "/tmp/ref.png",
+      prompt: "",
+      pads: { left: 30, top: 30, right: 30, bottom: 30 },
+      maxSample: 1536,
+    });
+    const i = args.indexOf("--max-sample");
+    assert.equal(i, args.indexOf("--pad") + 2);
+    assert.equal(args[i + 1], "1536");
+    assert.equal(args[args.length - 1], "");
+  });
+
+  it("提示词做 {a|b} 转义保证单任务", () => {
+    const args = buildSiliconExpandAddArgs({
+      imagePath: "/tmp/ref.png",
+      prompt: "延伸 {湖面|草地}",
+      pads: { left: 0, top: 0, right: 50, bottom: 0 },
+    });
+    assert.equal(args[args.length - 1], "延伸 \\{湖面\\|草地\\}");
+  });
+});
+
+describe("describeSiliconExpandRejection（旧版 CLI 拒单翻译）", () => {
+  it("旧版未知选项报错翻译为升级提示", () => {
+    const text = describeSiliconExpandRejection(
+      "silicontrol add: unknown option --pad",
+      "usage",
+    );
+    assert.ok(text);
+    assert.ok(text.includes("版本过旧"));
+    assert.ok(text.includes("--mode expand"));
+    assert.ok(text.includes("unknown option --pad"));
+  });
+
+  it("usage: 前缀文本命中（不带 code）", () => {
+    const text = describeSiliconExpandRejection("usage: silicontrol add [options]");
+    assert.ok(text);
+    assert.ok(text.includes("版本过旧"));
+  });
+
+  it("新 CLI 自身的 usage 错误（pad 非法等）保留原文，仅附升级提示", () => {
+    // 即便是 usage 类，原始错误尾行也在文案中，不会吞信息
+    const text = describeSiliconExpandRejection("error: --pad all zero", "usage");
+    assert.ok(text?.includes("--pad all zero"));
+  });
+
+  it("其他错误返回 null（原样上抛）", () => {
+    assert.equal(describeSiliconExpandRejection("queue_full"), null);
+    assert.equal(describeSiliconExpandRejection("model not ready"), null);
+    assert.equal(describeSiliconExpandRejection("", undefined), null);
   });
 });

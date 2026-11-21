@@ -36,4 +36,12 @@ describe("promptBlocksSubmit", () => {
     assert.ok(final.includes("保持光影"));
     assert.equal(promptBlocksSubmit("siliconed", final), false);
   });
+
+  it("expand 工作流：提示词是固定句子的补充，留空恒不阻断", () => {
+    assert.equal(promptBlocksSubmit("siliconed", "", "expand"), false);
+    assert.equal(promptBlocksSubmit("siliconed", "   ", "expand"), false);
+    assert.equal(promptBlocksSubmit("ark", "", "expand"), false);
+    assert.equal(promptBlocksSubmit("custom", "", "expand"), false);
+    assert.equal(promptBlocksSubmit("ark", "把天空换成晚霞", "expand"), false);
+  });
 });

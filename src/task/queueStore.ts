@@ -1,4 +1,5 @@
 import type { CaptureResult } from "../ps/capture";
+import type { ExpandCaptureResult } from "../ps/expandCapture";
 import type { QueueJob, QueueStatus } from "./queue";
 import {
   FAILED_RETENTION_MS,
@@ -227,6 +228,12 @@ export interface CaptureFiles {
   maskPath: string;
   sendMaskPath: string;
   maskPngPath: string;
+  inputBytes: number;
+}
+
+/** expand 任务的落盘产物：只有源图，无蒙版。 */
+export interface ExpandCaptureFiles {
+  refPath: string;
   inputBytes: number;
 }
 
@@ -471,6 +478,27 @@ export class QueueStore {
       maskPngPath: maskPng.path,
       inputBytes: ref.size + mask.size + sendMask.size + maskPng.size,
     };
+  }
+
+  /** expand 任务只落源图 ref.png（无蒙版），返回路径与字节数。 */
+  async persistExpandCapture(
+    id: string,
+    capture: ExpandCaptureResult,
+  ): Promise<ExpandCaptureFiles> {
+    await this.init();
+    if (!storageAvailable()) {
+      throw new Error("当前宿主不支持 UXP 本地文件系统，无法把抓取结果落盘");
+    }
+    if (!this.queueFolder) throw new Error("队列目录不可用");
+    const folder = await this.ensureJobFolder(id);
+    const ref = await writeBinary(folder, "ref.png", base64ToBytes(capture.pngBase64));
+    return { refPath: ref.path, inputBytes: ref.size };
+  }
+
+  /** expand 生成只需源图 base64（无蒙版可读）。 */
+  async loadExpandCapture(job: QueueJob): Promise<string> {
+    const bytes = await readBinary(await this.resolveFile(job.refPath));
+    return bytesToBase64(bytes);
   }
 
   /** 从磁盘重建生成所需的像素 / 蒙版。 */

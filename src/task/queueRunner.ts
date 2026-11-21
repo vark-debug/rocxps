@@ -4,7 +4,11 @@ import { getCatalogModel } from "../providers/catalog";
 import { resolveSiliconMode } from "../providers/siliconedPlan";
 import { siliconCancel, siliconStatus, findSiliconJobState } from "../core/silicontrol";
 import { placeBack } from "../ps/placeBack";
+import { placeBackExpand } from "../ps/placeBackExpand";
 import type { CaptureResult } from "../ps/capture";
+import type { ExpandCaptureResult } from "../ps/expandCapture";
+import { computeExpandPads } from "../ps/expandPlan";
+import { DEFAULT_SIZE_MODE } from "../ps/presetFit";
 import { decodeImageBytes } from "../ps/imageDecode";
 import { encodePng } from "../ps/pngEncoder";
 import { resizeRgba } from "../ps/resize";
@@ -72,6 +76,16 @@ interface Grace {
   resolve: () => void;
   timer: ReturnType<typeof setTimeout>;
 }
+
+/** expand 任务的四边 pad：优先用入队快照，旧数据缺失时按 originalBounds + 画布兜底重算。 */
+const expandPadsOf = (job: QueueJob) => {
+  if (job.expandPads) return job.expandPads;
+  return computeExpandPads(
+    job.originalBounds,
+    job.canvasWidth ?? job.originalBounds.right,
+    job.canvasHeight ?? job.originalBounds.bottom,
+  ).pads;
+};
 
 export interface CancelOutcome {
   kind: "cancelled" | "kept-result" | "already-finished" | "requested";
@@ -150,7 +164,33 @@ export class QueueRunner {
 
     let capture: CaptureResult;
     try {
-      capture = await this.rebuildCapture(initial);
+      if (initial.workflow === "expand") {
+        // 扩图任务没有蒙版文件：只读回源图，拼一个最小 capture（generate 只用 pngBase64）
+        const pngBase64 = await this.store.loadExpandCapture(initial);
+        capture = {
+          docId: initial.docId,
+          docName: initial.docName,
+          docPath: initial.docPath ?? "",
+          canvasWidth: initial.canvasWidth ?? 0,
+          canvasHeight: initial.canvasHeight ?? 0,
+          originalBounds: initial.originalBounds,
+          expanded: initial.expanded,
+          sizeMode: initial.sizeMode,
+          preset: null,
+          sendWidth: initial.sendWidth,
+          sendHeight: initial.sendHeight,
+          pngBase64,
+          mask: { width: 0, height: 0, data: new Uint8Array(0) },
+          sendMask: { width: 0, height: 0, data: new Uint8Array(0) },
+          maskPngBase64: "",
+          captureRect: initial.captureRect,
+          padAmounts: { left: 0, top: 0, right: 0, bottom: 0 },
+          sizeWarnings: [],
+          selectionExpand: 1,
+        };
+      } else {
+        capture = await this.rebuildCapture(initial);
+      }
     } catch (err) {
       this.markFailed(
         id,
@@ -181,16 +221,23 @@ export class QueueRunner {
       this.store.update(id, { attempts: attempt, stage: "submitting" });
       try {
         const siliconed = initial.providerId === "siliconed";
-        const resolved = resolveSiliconMode(
-          initial.prompt,
-          settings.promptSuffix,
-          settings.siliconedMode,
-        );
-        const promptFull = siliconed
-          ? resolved.prompt
-          : [initial.prompt, settings.promptSuffix]
-              .filter((part) => part && part.trim())
-              .join("\n");
+        const expand = initial.workflow === "expand";
+        // 扩图：提示词是工作流固定句子的补充，语义独立，不拼 promptSuffix
+        //（默认后缀含「选区」措辞，对扩图是错误指令），也不做 remove/redraw 判定
+        const resolved = expand
+          ? null
+          : resolveSiliconMode(
+              initial.prompt,
+              settings.promptSuffix,
+              settings.siliconedMode,
+            );
+        const promptFull = expand
+          ? initial.prompt.trim()
+          : siliconed
+            ? resolved!.prompt
+            : [initial.prompt, settings.promptSuffix]
+                .filter((part) => part && part.trim())
+                .join("\n");
         const resultBase64 = await this.withGrace(
           id,
           generateWithProvider({
@@ -198,9 +245,21 @@ export class QueueRunner {
             model,
             apiKey,
             prompt: promptFull,
-            siliconMode: siliconed ? resolved.mode : undefined,
+            siliconMode: expand || !siliconed ? undefined : resolved!.mode,
+            ...(expand
+              ? {
+                  expand: {
+                    pads: expandPadsOf(initial),
+                    ...(initial.expandMaxSample
+                      ? { maxSample: initial.expandMaxSample }
+                      : {}),
+                  },
+                }
+              : {}),
             imageDataUri: `data:image/png;base64,${capture.pngBase64}`,
-            maskDataUri: `data:image/png;base64,${capture.maskPngBase64}`,
+            maskDataUri: expand
+              ? ""
+              : `data:image/png;base64,${capture.maskPngBase64}`,
             capture,
             request: { reqW: initial.reqW, reqH: initial.reqH },
             signal: controller.signal,
@@ -302,24 +361,35 @@ export class QueueRunner {
     this.store.update(id, { stage: "placing", autoPlace: false, error: undefined });
     this.notify();
     try {
-      const [resultBase64, mask] = await Promise.all([
-        this.store.loadResultBase64(job),
-        this.store.loadMask(job),
-      ]);
-      const placed = await placeBack({
-        docId: job.reboundDocId ?? job.docId,
-        docName: job.docName,
-        docPath: job.docPath,
-        canvasWidth: job.canvasWidth,
-        canvasHeight: job.canvasHeight,
-        expanded: job.expanded,
-        mask,
-        // 贴回时读当前设置（任务里只记录实际生效的模式）
-        mode: settings.placeBackMode,
-        resultBase64,
-        reqW: job.reqW,
-        reqH: job.reqH,
-      });
+      const resultBase64 = await this.store.loadResultBase64(job);
+      const placed =
+        job.workflow === "expand"
+          ? await placeBackExpand({
+              docId: job.reboundDocId ?? job.docId,
+              docName: job.docName,
+              docPath: job.docPath,
+              canvasWidth: job.canvasWidth,
+              canvasHeight: job.canvasHeight,
+              source: job.originalBounds,
+              pads: expandPadsOf(job),
+              resultBase64,
+              reqW: job.reqW,
+              reqH: job.reqH,
+            })
+          : await placeBack({
+              docId: job.reboundDocId ?? job.docId,
+              docName: job.docName,
+              docPath: job.docPath,
+              canvasWidth: job.canvasWidth,
+              canvasHeight: job.canvasHeight,
+              expanded: job.expanded,
+              mask: await this.store.loadMask(job),
+              // 贴回时读当前设置（任务里只记录实际生效的模式）
+              mode: settings.placeBackMode,
+              resultBase64,
+              reqW: job.reqW,
+              reqH: job.reqH,
+            });
       if (placed.documentMissing) {
         this.store.update(id, {
           status: "pendingPlace",
@@ -812,6 +882,92 @@ export const enqueueCapture = async (options: EnqueueOptions): Promise<QueueJob>
     queueStore.add(job);
   } catch (err) {
     // 入队被拒（并发下队列刚好满）：清掉落盘文件，避免留下孤儿目录
+    await queueStore.removeFiles(job, { keepThumb: false });
+    throw err;
+  }
+  queueScheduler.notify();
+  return job;
+};
+
+export interface EnqueueExpandOptions {
+  prompt: string;
+  capture: ExpandCaptureResult;
+  /** 入队时生效的设置（provider 必须是 Siliconed）。 */
+  settings: RedrawSettings;
+}
+
+/**
+ * 阔图入队：源图立刻落盘（无蒙版），队列项只保留路径。
+ *
+ * 字段映射（复用 QueueJob 既有几何字段）：
+ * - originalBounds = 非透明包围盒（源图区域，画布坐标）；
+ * - expanded = 整个扩展画布（贴回语义上是「扩到的目标区域」）；
+ * - reqW/reqH = 逻辑输出画布（源图 × (1 + pad%)），outputMismatch 比较基准；
+ * - mask 路径全部置空串（expand 无蒙版）。
+ */
+export const enqueueExpandCapture = async (
+  options: EnqueueExpandOptions,
+): Promise<QueueJob> => {
+  const { prompt, capture, settings } = options;
+  await queueStore.init();
+  if (!queueStore.hasCapacity()) {
+    throw new Error(
+      `任务队列已满（最多 ${QUEUE_LIMIT} 条），请等待任务完成或清空已完成 / 已取消项`,
+    );
+  }
+  const model = getCatalogModel(settings.modelId);
+  if (model.provider !== "siliconed") {
+    throw new Error("扩图仅支持 Siliconed：请先在设置中切换模型");
+  }
+  const id = newJobId();
+  const files = await queueStore.persistExpandCapture(id, capture);
+  const canvasRect = {
+    left: 0,
+    top: 0,
+    right: capture.canvasWidth,
+    bottom: capture.canvasHeight,
+  };
+  const job: QueueJob = {
+    id,
+    prompt: prompt.trim(),
+    providerId: model.provider,
+    modelId: model.id,
+    docId: capture.docId,
+    docName: capture.docName,
+    ...(capture.docPath ? { docPath: capture.docPath } : {}),
+    canvasWidth: capture.canvasWidth,
+    canvasHeight: capture.canvasHeight,
+    originalBounds: capture.source,
+    expanded: {
+      bounds: canvasRect,
+      width: capture.canvasWidth,
+      height: capture.canvasHeight,
+    },
+    captureRect: canvasRect,
+    // 扩图不走尺寸预设；sizeMode 仅作元数据保留
+    sizeMode: DEFAULT_SIZE_MODE,
+    presetId: null,
+    sendWidth: capture.sendWidth,
+    sendHeight: capture.sendHeight,
+    reqW: capture.pads.logicalWidth,
+    reqH: capture.pads.logicalHeight,
+    workflow: "expand",
+    expandPads: capture.pads.pads,
+    expandMaxSample: settings.expandMaxSample,
+    refPath: files.refPath,
+    maskPath: "",
+    sendMaskPath: "",
+    maskPngPath: "",
+    inputBytes: files.inputBytes,
+    status: "queued",
+    stage: "queued",
+    lane: laneForProvider(model.provider),
+    createdAt: Date.now(),
+    attempts: 0,
+  };
+  try {
+    queueStore.add(job);
+  } catch (err) {
     await queueStore.removeFiles(job, { keepThumb: false });
     throw err;
   }

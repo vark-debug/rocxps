@@ -6,7 +6,13 @@ import { comfyGenerate, comfyProbe } from "./comfyui";
 import { customGenerate } from "./custom";
 import { iopaintGenerate, iopaintProbe } from "./iopaint";
 import { runningHubGenerate, runningHubProbe } from "./runninghub";
-import { siliconedGenerate, siliconedProbe } from "./siliconed";
+import {
+  siliconedExpandGenerate,
+  siliconedGenerate,
+  siliconedProbe,
+  type SiliconExpandRequest,
+} from "./siliconed";
+import { ProviderError } from "./http";
 import type { SiliconMode } from "./siliconedPlan";
 import type {
   CatalogModel,
@@ -62,6 +68,11 @@ export interface GenerateInput {
   prompt: string;
   /** Siliconed 蒙版分支（其他平台忽略）；缺省按 remove。 */
   siliconMode?: SiliconMode;
+  /**
+   * Siliconed 阔图（expand）请求参数；存在时走 siliconedExpandGenerate，
+   * 无蒙版分支。其他平台收到 expand 请求属于 UI 拦截失效的兜底，直接报错。
+   */
+  expand?: SiliconExpandRequest;
   /** 选区内容图 data URI。 */
   imageDataUri: string;
   /** 黑白通道图 data URI（仅 Ark 默认使用，其他平台可取 {{mask}}）。 */
@@ -95,6 +106,11 @@ export const generateWithProvider = async (
     height,
     aspect: nearestAspect(width, height),
   };
+
+  // 阔图仅 Siliconed 支持：UI 层拦截失效时的兜底
+  if (input.expand && model.provider !== "siliconed") {
+    throw new ProviderError("terminal", "扩图仅支持 Siliconed");
+  }
 
   switch (model.provider) {
     case "ark": {
@@ -141,6 +157,24 @@ export const generateWithProvider = async (
         vars,
       );
     case "siliconed":
+      if (input.expand) {
+        return siliconedExpandGenerate(
+          {
+            cliPath: settings.siliconedCliPath,
+            timeoutMs: settings.requestTimeoutMs,
+            computeTarget: settings.siliconedComputeTarget,
+            targetMacId: settings.siliconedTargetMac,
+            targetPolicy: settings.siliconedTargetPolicy,
+            onComputeTarget: input.onComputeTarget,
+            onProgress: input.onProgress,
+            signal: input.signal,
+            onJobId: input.onJobId,
+          },
+          imageDataUri,
+          prompt,
+          input.expand,
+        );
+      }
       return siliconedGenerate(
         {
           cliPath: settings.siliconedCliPath,

@@ -20,11 +20,14 @@ import {
 } from "./http";
 import {
   buildSiliconAddArgs,
+  buildSiliconExpandAddArgs,
+  describeSiliconExpandRejection,
   describeSiliconPatchRejection,
   SILICONED_DEFAULT_PROMPT,
   type SiliconMode,
 } from "./siliconedPlan";
 import { retryUnknownJob } from "./siliconedRetry";
+import type { PadPercent } from "../ps/expandPlan";
 import {
   emptySiliconMacs,
   planComputeTarget,
@@ -97,12 +100,15 @@ interface SiliconTempWorkspace {
   maskPath: string;
   outDir: string;
   imageFile: UXPFileLike;
-  maskFile: UXPFileLike;
+  /** expand 工作流无蒙版：为 null。 */
+  maskFile: UXPFileLike | null;
   outputs: UXPFileLike[];
   cleanup: () => Promise<void>;
 }
 
-const deleteBestEffort = async (entry: UXPEntryLike | undefined): Promise<void> => {
+const deleteBestEffort = async (
+  entry: UXPEntryLike | UXPFileLike | null | undefined,
+): Promise<void> => {
   try {
     await Promise.resolve(entry?.delete?.());
   } catch {
@@ -128,7 +134,7 @@ const writeBinary = async (
 
 const createTempWorkspace = async (
   imageDataUri: string,
-  maskDataUri: string,
+  maskDataUri: string | null,
 ): Promise<SiliconTempWorkspace> => {
   if (!storage?.localFileSystem || !storage.formats?.binary) {
     throw new ProviderError("terminal", "当前宿主不支持 UXP 本地文件系统，无法向 Siliconed 传递图片");
@@ -139,12 +145,15 @@ const createTempWorkspace = async (
     .slice(2, 8)}`;
   const folder = await root.createFolder(name);
   const imageFile = await writeBinary(folder, "image.png", imageDataUri);
-  const maskFile = await writeBinary(folder, "mask.png", maskDataUri);
+  // mask 为 null：扩图工作流没有蒙版（CLI 传了 --mask 会被拒绝）
+  const maskFile = maskDataUri
+    ? await writeBinary(folder, "mask.png", maskDataUri)
+    : null;
   const outputs: UXPFileLike[] = [];
   return {
     folder,
     imagePath: imageFile.nativePath,
-    maskPath: maskFile.nativePath,
+    maskPath: maskFile?.nativePath ?? "",
     outDir: folder.nativePath,
     imageFile,
     maskFile,
@@ -266,6 +275,191 @@ const readTargetSnapshot = async (
   return { ...snapshot, computingOn: status.computingOn };
 };
 
+/** 提交前计算目标校验 / 切换（mask 与 expand 两个入口共用）。 */
+const ensureComputeTarget = async (
+  cfg: SiliconedConfig,
+): Promise<{
+  requestedLabel: string;
+  targetSnapshot: SiliconMacsSnapshot;
+  switched: boolean;
+}> => {
+  const preStatus = await siliconStatus(cfg.cliPath);
+  let targetSnapshot = await readTargetSnapshot(cfg, preStatus);
+  const policy = cfg.targetPolicy ?? "auto";
+  const check = planComputeTarget(
+    {
+      target: cfg.computeTarget ?? "local",
+      macId: cfg.targetMacId,
+      policy,
+    },
+    targetSnapshot,
+  );
+  if (check.kind === "blocked") {
+    throw new ProviderError(
+      "terminal",
+      check.message ?? "计算目标不可用",
+      undefined,
+      "compute_target",
+    );
+  }
+  let switched = false;
+  if (check.kind === "switch" && check.computeArg) {
+    await siliconCompute(cfg.cliPath, check.computeArg);
+    switched = true;
+    // compute 返回后再读一次 status：确认切换是否真的生效（0.20 会自行回切）
+    const refreshed = await siliconStatus(cfg.cliPath);
+    targetSnapshot = { ...targetSnapshot, computingOn: refreshed.computingOn };
+  }
+  return { requestedLabel: check.targetLabel, targetSnapshot, switched };
+};
+
+/** 以 add 响应为准记录实际计算目标并写入历史（两个入口共用）。 */
+const reportComputeTarget = (
+  cfg: SiliconedConfig,
+  requested: string,
+  targetSnapshot: SiliconMacsSnapshot,
+  switched: boolean,
+  add: Awaited<ReturnType<typeof siliconAdd>>,
+): ComputeTargetInfo => {
+  const actual = add.computingOn ?? targetSnapshot.computingOn;
+  const actualName = targetLabel(actual);
+  const selectedMacId = (cfg.targetMacId ?? "").trim();
+  const matches =
+    cfg.computeTarget === "mac"
+      ? actual !== null &&
+        (actual === requested || actual === selectedMacId)
+      : actual === null;
+  const mismatch = !matches;
+  // 远端首次渲染会先自测（约 110s），此时 add 的 estimate_s 为空
+  const firstMeasure = actual !== null && add.estimateS == null;
+  const notes: string[] = [];
+  if (mismatch) {
+    notes.push(
+      `Siliconed 实际在「${actualName}」上计算，与目标「${requested}」不一致${
+        switched ? "（已尝试切换但未生效）" : ""
+      }`,
+    );
+  }
+  if (firstMeasure) {
+    notes.push(
+      "目标机首次测量中：会先自测约 2 分钟，之后才会给出预计时间",
+    );
+  }
+  const info: ComputeTargetInfo = {
+    requested,
+    actual: actualName,
+    mismatch,
+    firstMeasure,
+    ...(notes.length ? { note: notes.join("；") } : {}),
+  };
+  cfg.onComputeTarget?.(info);
+  return info;
+};
+
+/** 等待任务完成并读回结果 PNG base64（两个入口共用；超时 / 取消 / 结果读取）。 */
+const awaitSiliconResult = async (
+  cfg: SiliconedConfig,
+  add: Awaited<ReturnType<typeof siliconAdd>>,
+  temp: SiliconTempWorkspace,
+  computeInfo: ComputeTargetInfo,
+): Promise<string> => {
+  // 整任务超时：基础值 + 队列 / 渲染估算（首次拿到 status 后延长一次）
+  const startedAt = Date.now();
+  const deadline = {
+    at: startedAt + Math.max(cfg.timeoutMs, 120_000),
+  };
+  let extended = false;
+  let snapshot: SiliconJobSnapshot = { state: "queued" };
+
+  await waitForSiliconJob({
+    cliPath: cfg.cliPath,
+    job: add.job,
+    deadline,
+    pollIntervalMs: cfg.pollIntervalMs ?? POLL_INTERVAL_MS,
+    signal: cfg.signal,
+    onStatus: (status, current) => {
+      snapshot = current;
+      if (!extended) {
+        const expectedMs =
+          ((status.queueRemainingS ?? 0) + (add.estimateS ?? 0)) * 1000;
+        if (expectedMs > 0) {
+          deadline.at = Math.max(
+            deadline.at,
+            startedAt + expectedMs * 2 + 60_000,
+          );
+          extended = true;
+        }
+      }
+      cfg.onProgress?.(
+        progressFromStatus(status, current, {
+          firstMeasure: computeInfo.firstMeasure,
+        }),
+      );
+    },
+  });
+  void snapshot;
+
+  // status 已看不到 job 后，wait 对已完成任务立即返回；
+  // add 返回后立刻 wait 存在 unknown_job 竞态（状态尚未同步），按短重试处理
+  const waited = await retryUnknownJob(() =>
+    siliconWait(
+      cfg.cliPath,
+      [add.job],
+      temp.outDir,
+      Math.max(120_000, deadline.at - Date.now()),
+      true,
+    ),
+  );
+  // 取消后 wait 返回 {ok:false,error:"render"}，jobs[].outcome 为 stopped / removed；
+  // 必须先看 outcome，绝不能把取消记成失败。
+  const outcomes = Array.isArray(waited.verdict.jobs)
+    ? waited.verdict.jobs.map((job) =>
+        typeof job?.outcome === "string" ? job.outcome : "unknown",
+      )
+    : [];
+  if (outcomes.some((o) => o === "stopped" || o === "removed")) {
+    throw new ProviderError(
+      "cancelled",
+      `Siliconed 任务 ${add.job} 已取消（${outcomes.join(" / ")}）`,
+    );
+  }
+  if (!waited.verdict.ok) {
+    const detail =
+      typeof waited.verdict.message === "string" && waited.verdict.message
+        ? waited.verdict.message
+        : outcomes.some((o) => o === "error")
+          ? outcomes.join(" / ")
+          : String(waited.verdict.error ?? "未知错误");
+    throw new ProviderError("terminal", `Siliconed 任务失败：${detail}`);
+  }
+  const image = waited.images[0];
+  if (image?.writeError) {
+    throw new ProviderError(
+      "terminal",
+      `Siliconed 结果 PNG 写入失败：${image.writeError}`,
+    );
+  }
+  if (!image?.path) {
+    throw new ProviderError(
+      "terminal",
+      "Siliconed 任务已结束，但没有返回结果图片（可能被取消或写入失败）",
+    );
+  }
+  const file = await findOutputFile(temp.folder, image.path);
+  const data = (await file.read({ format: storage!.formats.binary })) as unknown;
+  let bytes: Uint8Array | null = null;
+  if (data instanceof ArrayBuffer) {
+    bytes = new Uint8Array(data);
+  } else if (ArrayBuffer.isView(data)) {
+    bytes = new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
+  }
+  if (!bytes) {
+    throw new ProviderError("terminal", "读取 Siliconed 结果失败：返回内容不是二进制");
+  }
+  temp.outputs.push(file);
+  return bytesToBase64(bytes);
+};
+
 /**
  * 生成入口：返回 PNG base64（无 data: 前缀）。
  * 送图与蒙版由 capture 按预设尺寸产出，CLI 默认 paste 会原尺寸返回，贴回仍按 capture.expanded。
@@ -291,33 +485,7 @@ export async function siliconedGenerate(
 
   try {
     // 0) 提交前校验实际计算目标：Siliconed 会自行回切，绝不能假设目标固定
-    const preStatus = await siliconStatus(cfg.cliPath);
-    let targetSnapshot = await readTargetSnapshot(cfg, preStatus);
-    const policy = cfg.targetPolicy ?? "auto";
-    const check = planComputeTarget(
-      {
-        target: cfg.computeTarget ?? "local",
-        macId: cfg.targetMacId,
-        policy,
-      },
-      targetSnapshot,
-    );
-    if (check.kind === "blocked") {
-      throw new ProviderError(
-        "terminal",
-        check.message ?? "计算目标不可用",
-        undefined,
-        "compute_target",
-      );
-    }
-    let switched = false;
-    if (check.kind === "switch" && check.computeArg) {
-      await siliconCompute(cfg.cliPath, check.computeArg);
-      switched = true;
-      // compute 返回后再读一次 status：确认切换是否真的生效（0.20 会自行回切）
-      const refreshed = await siliconStatus(cfg.cliPath);
-      targetSnapshot = { ...targetSnapshot, computingOn: refreshed.computingOn };
-    }
+    const target = await ensureComputeTarget(cfg);
 
     const seed = Math.floor(Math.random() * 2 ** 31);
     let add: Awaited<ReturnType<typeof siliconAdd>>;
@@ -343,134 +511,95 @@ export async function siliconedGenerate(
     cfg.onJobId?.(add.job);
 
     // add 响应里的 computing_on 可能已经回切：以它为准记录实际目标并写入历史
-    const actual = add.computingOn ?? targetSnapshot.computingOn;
-    const requested = check.targetLabel;
-    const actualName = targetLabel(actual);
-    const selectedMacId = (cfg.targetMacId ?? "").trim();
-    const matches =
-      cfg.computeTarget === "mac"
-        ? actual !== null &&
-          (actual === requested || actual === selectedMacId)
-        : actual === null;
-    const mismatch = !matches;
-    // 远端首次渲染会先自测（约 110s），此时 add 的 estimate_s 为空
-    const firstMeasure = actual !== null && add.estimateS == null;
-    const notes: string[] = [];
-    if (mismatch) {
-      notes.push(
-        `Siliconed 实际在「${actualName}」上计算，与目标「${requested}」不一致${
-          switched ? "（已尝试切换但未生效）" : ""
-        }`,
-      );
-    }
-    if (firstMeasure) {
-      notes.push(
-        "目标机首次测量中：会先自测约 2 分钟，之后才会给出预计时间",
-      );
-    }
-    const computeInfo: ComputeTargetInfo = {
-      requested,
-      actual: actualName,
-      mismatch,
-      firstMeasure,
-      ...(notes.length ? { note: notes.join("；") } : {}),
-    };
-    cfg.onComputeTarget?.(computeInfo);
-
-    // 整任务超时：基础值 + 队列 / 渲染估算（首次拿到 status 后延长一次）
-    const startedAt = Date.now();
-    const deadline = {
-      at: startedAt + Math.max(cfg.timeoutMs, 120_000),
-    };
-    let extended = false;
-    let snapshot: SiliconJobSnapshot = { state: "queued" };
-
-    await waitForSiliconJob({
-      cliPath: cfg.cliPath,
-      job: add.job,
-      deadline,
-      pollIntervalMs: cfg.pollIntervalMs ?? POLL_INTERVAL_MS,
-      signal: cfg.signal,
-      onStatus: (status, current) => {
-        snapshot = current;
-        if (!extended) {
-          const expectedMs =
-            ((status.queueRemainingS ?? 0) + (add.estimateS ?? 0)) * 1000;
-          if (expectedMs > 0) {
-            deadline.at = Math.max(
-              deadline.at,
-              startedAt + expectedMs * 2 + 60_000,
-            );
-            extended = true;
-          }
-        }
-        cfg.onProgress?.(
-          progressFromStatus(status, current, {
-            firstMeasure: computeInfo.firstMeasure,
-          }),
-        );
-      },
-    });
-
-    // status 已看不到 job 后，wait 对已完成任务立即返回；
-    // add 返回后立刻 wait 存在 unknown_job 竞态（状态尚未同步），按短重试处理
-    const waited = await retryUnknownJob(() =>
-      siliconWait(
-        cfg.cliPath,
-        [add.job],
-        temp.outDir,
-        Math.max(120_000, deadline.at - Date.now()),
-        true,
-      ),
+    const computeInfo = reportComputeTarget(
+      cfg,
+      target.requestedLabel,
+      target.targetSnapshot,
+      target.switched,
+      add,
     );
-    // 取消后 wait 返回 {ok:false,error:"render"}，jobs[].outcome 为 stopped / removed；
-    // 必须先看 outcome，绝不能把取消记成失败。
-    const outcomes = Array.isArray(waited.verdict.jobs)
-      ? waited.verdict.jobs.map((job) =>
-          typeof job?.outcome === "string" ? job.outcome : "unknown",
-        )
-      : [];
-    if (outcomes.some((o) => o === "stopped" || o === "removed")) {
-      throw new ProviderError(
-        "cancelled",
-        `Siliconed 任务 ${add.job} 已取消（${outcomes.join(" / ")}）`,
+
+    return await awaitSiliconResult(cfg, add, temp, computeInfo);
+  } finally {
+    await temp.cleanup();
+  }
+}
+
+/** 阔图（expand）请求参数：四边 pad 与可选采样上限。 */
+export interface SiliconExpandRequest {
+  /** clamp 后的四边 pad 百分比（computeExpandPads.pads）。 */
+  pads: PadPercent;
+  /** 采样长边上限（已归一化）；缺省走 CLI 默认 2048。 */
+  maxSample?: number;
+}
+
+/**
+ * 阔图任务的基础超时下限。
+ *
+ * expand 是整图重建（不是选区 patch），实测低配机上 9 步渲染也会超过 15 分钟；
+ * 设置里的 requestTimeoutMs 是按局部重绘标定的（默认 5 分钟），对扩图明显不够。
+ * 这里给一个独立下限：基础超时 = max(设置值, 20 分钟)，估算延长逻辑仍在其上生效。
+ */
+export const EXPAND_BASE_TIMEOUT_MS = 20 * 60_000;
+
+/**
+ * 阔图生成入口（Siliconed `--mode expand`，0.21+）：返回 PNG base64。
+ *
+ * 与 mask 工作流的差异：无 `--mask`（CLI 拒绝）；提示词是工作流固定句子的
+ * 补充，可留空；输出画布由 `--pad` 决定（可能大于源图），贴回走 placeBackExpand。
+ * 旧版 silicontrol 不认识 expand 参数，usage 类错误统一翻译为「版本过旧」。
+ */
+export async function siliconedExpandGenerate(
+  cfg: SiliconedConfig,
+  imageDataUri: string,
+  prompt: string,
+  request: SiliconExpandRequest,
+): Promise<string> {
+  if (!isMacHost()) {
+    throw new ProviderError("terminal", "Siliconed 仅支持 macOS 26+");
+  }
+  // 提示词是固定句子的补充，可留空；空格 / 空串原样传给 CLI
+  const text = prompt.trim();
+  const temp = await createTempWorkspace(imageDataUri, null);
+
+  try {
+    const target = await ensureComputeTarget(cfg);
+    let add: Awaited<ReturnType<typeof siliconAdd>>;
+    try {
+      add = await siliconAdd(
+        cfg.cliPath,
+        buildSiliconExpandAddArgs({
+          imagePath: temp.imagePath,
+          prompt: text,
+          pads: request.pads,
+          ...(request.maxSample ? { maxSample: request.maxSample } : {}),
+        }),
       );
+    } catch (e) {
+      // 旧版 CLI 不支持 expand：usage 类错误翻译为升级提示，其余原样抛出
+      const msg = e instanceof Error ? e.message : String(e);
+      const code = e instanceof ProviderError ? e.code : undefined;
+      const hint = describeSiliconExpandRejection(msg, code);
+      if (hint) throw new ProviderError("terminal", hint);
+      throw e;
     }
-    if (!waited.verdict.ok) {
-      const detail =
-        typeof waited.verdict.message === "string" && waited.verdict.message
-          ? waited.verdict.message
-          : outcomes.some((o) => o === "error")
-            ? outcomes.join(" / ")
-            : String(waited.verdict.error ?? "未知错误");
-      throw new ProviderError("terminal", `Siliconed 任务失败：${detail}`);
-    }
-    const image = waited.images[0];
-    if (image?.writeError) {
-      throw new ProviderError(
-        "terminal",
-        `Siliconed 结果 PNG 写入失败：${image.writeError}`,
-      );
-    }
-    if (!image?.path) {
-      throw new ProviderError(
-        "terminal",
-        "Siliconed 任务已结束，但没有返回结果图片（可能被取消或写入失败）",
-      );
-    }
-    const file = await findOutputFile(temp.folder, image.path);
-    const data = (await file.read({ format: storage!.formats.binary })) as unknown;
-    let bytes: Uint8Array | null = null;
-    if (data instanceof ArrayBuffer) {
-      bytes = new Uint8Array(data);
-    } else if (ArrayBuffer.isView(data)) {
-      bytes = new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
-    }
-    if (!bytes) {
-      throw new ProviderError("terminal", "读取 Siliconed 结果失败：返回内容不是二进制");
-    }
-    temp.outputs.push(file);
-    return bytesToBase64(bytes);
+    cfg.onJobId?.(add.job);
+
+    const computeInfo = reportComputeTarget(
+      cfg,
+      target.requestedLabel,
+      target.targetSnapshot,
+      target.switched,
+      add,
+    );
+
+    // expand 是整图重建，基础超时下限按 EXPAND_BASE_TIMEOUT_MS 抬高（其余行为不变）
+    return await awaitSiliconResult(
+      { ...cfg, timeoutMs: Math.max(cfg.timeoutMs, EXPAND_BASE_TIMEOUT_MS) },
+      add,
+      temp,
+      computeInfo,
+    );
   } finally {
     await temp.cleanup();
   }

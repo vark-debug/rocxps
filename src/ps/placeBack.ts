@@ -136,7 +136,7 @@ const assertNoError = (
 };
 
 /** 写入像素到结果图层（imageData 用完立即释放，避免占用有限槽位）。 */
-const writePixels = async (
+export const writePixels = async (
   docId: number,
   layerId: number,
   pixels: Uint8Array,
@@ -462,7 +462,7 @@ const ensureArtifactFolder = async (): Promise<UXPFolderLike> => {
  * 把生成结果 PNG 存到插件 data 目录，供用户稍后打开原文档再贴回。
  * 返回可供 UI 展示的路径（优先 nativePath）。
  */
-const saveArtifact = async (docId: number, base64: string): Promise<string> => {
+export const saveArtifact = async (docId: number, base64: string): Promise<string> => {
   const folder = await ensureArtifactFolder();
   const name = `rocxps-placeback-${docId}-${Date.now()}.png`;
   const file = await folder.createFile(name, { overwrite: true });

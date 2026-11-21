@@ -134,7 +134,7 @@ export interface CaptureOptions {
 }
 
 /** DOM 属性可能返回 UnitValue 包装对象（{_value, _unit}），统一取数值。 */
-const toPx = (value: unknown): number => {
+export const toPx = (value: unknown): number => {
   const raw =
     value && typeof value === "object" && "_value" in (value as { _value?: unknown })
       ? (value as { _value: unknown })._value
@@ -144,7 +144,7 @@ const toPx = (value: unknown): number => {
 };
 
 /** 文档路径：未保存文档 / 云文档可能为空或抛错，统一退化为空串。 */
-const readDocPath = (doc: Document): string => {
+export const readDocPath = (doc: Document): string => {
   try {
     const path = doc.path;
     return typeof path === "string" ? path : "";

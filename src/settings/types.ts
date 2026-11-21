@@ -19,6 +19,10 @@ import type {
 import type { SiliconModeChoice } from "../providers/siliconedPlan";
 import { DEFAULT_SIZE_MODE, type SizeMode } from "../ps/presetFit";
 import { DEFAULT_PRESET_ID } from "../ps/presets";
+import {
+  EXPAND_MAX_SAMPLE_DEFAULT,
+  type PanelWorkflow,
+} from "../ps/expandPlan";
 import { DEFAULT_UPSCALE_LONG_SIDE } from "../core/upscalePlan";
 
 /**
@@ -54,6 +58,10 @@ export interface RedrawSettings {
   /** 当前平台；决定设置面板展示哪些模型与哪些平台专属参数。 */
   providerId: ProviderId;
   modelId: string;
+  /** 主面板工作流：selection 框选局部重绘（默认）/ expand 阔图扩图（仅 Siliconed）。 */
+  panelWorkflow: PanelWorkflow;
+  /** 扩图采样长边上限（--max-sample，1024–3840 步进 128；缺省走 CLI 默认 2048）。 */
+  expandMaxSample: number;
   /** 生成并发上限。 */
   concurrency: number;
   /** 尺寸规划模式：auto 自动匹配预设 / fixed 指定预设 / custom 旧 32 对齐。 */
@@ -119,6 +127,8 @@ export interface RedrawSettings {
 export const DEFAULT_SETTINGS: RedrawSettings = {
   providerId: "ark",
   modelId: DEFAULT_MODEL_ID,
+  panelWorkflow: "selection",
+  expandMaxSample: EXPAND_MAX_SAMPLE_DEFAULT,
   concurrency: 2,
   sizeMode: DEFAULT_SIZE_MODE,
   fixedPresetId: DEFAULT_PRESET_ID,

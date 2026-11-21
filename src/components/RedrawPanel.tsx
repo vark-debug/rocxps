@@ -2,6 +2,8 @@ import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { type RequestSizeResult } from "../ark/sizeStrategy";
 import { getCatalogModel } from "../providers/catalog";
 import { captureSelection, type CaptureResult } from "../ps/capture";
+import { captureExpandCanvas, type ExpandCaptureResult } from "../ps/expandCapture";
+import type { PanelWorkflow } from "../ps/expandPlan";
 import { upscaleActiveLayer } from "../ps/layerUpscale";
 import {
   DEFAULT_UPSCALE_LONG_SIDE,
@@ -33,6 +35,7 @@ import { requestSizeFor } from "../task/pipeline";
 import type { QueueJob } from "../task/queue";
 import {
   enqueueCapture,
+  enqueueExpandCapture,
   initQueueRuntime,
   queueRunner,
   queueStore,
@@ -59,6 +62,16 @@ const SILICON_MODE_OPTIONS: Array<{ value: SiliconModeChoice; label: string }> =
 ];
 
 const SILICON_MODE_VALUES = SILICON_MODE_OPTIONS.map((o) => o.value);
+
+/** 阔图抓取摘要：画布 / 源图 / 四边 pad。 */
+const expandCapturePlanText = (c: ExpandCaptureResult): string => {
+  const p = c.pads.pads;
+  const pct = (v: number) => `${Math.round(v * 100) / 100}%`;
+  return (
+    `画布 ${c.canvasWidth}×${c.canvasHeight} · 源图 ${c.sendWidth}×${c.sendHeight}` +
+    ` · pad 左${pct(p.left)} 右${pct(p.right)} 上${pct(p.top)} 下${pct(p.bottom)}`
+  );
+};
 
 /**
  * 图层超分入口开关：功能暂时下线，实现保留，恢复时改回 true 即可。
@@ -223,6 +236,10 @@ export const RedrawPanel = () => {
   const [prompt, setPrompt] = useState("");
   const [capture, setCapture] = useState<CaptureResult | null>(null);
   const [request, setRequest] = useState<RequestSizeResult | null>(null);
+  /** 主面板工作流：selection 框选局部重绘 / expand 阔图扩图，持久化到设置。 */
+  const [workflow, setWorkflow] = useState<PanelWorkflow>("selection");
+  /** 阔图工作流的画布抓取结果（与选区抓取互不相干，切工作流时清空）。 */
+  const [expandCapture, setExpandCapture] = useState<ExpandCaptureResult | null>(null);
   const [captureBusy, setCaptureBusy] = useState(false);
   const [grabError, setGrabError] = useState("");
   const [queue, setQueue] = useState<QueueJob[]>(() => queueStore.list());
@@ -287,6 +304,7 @@ export const RedrawPanel = () => {
           setSiliconMode(s.siliconedMode);
           setUpscaleLongSide(String(s.upscaleLongSide));
           setQueueCollapsed(s.queueCollapsed);
+          setWorkflow(s.panelWorkflow);
           return refreshQueueRuntime();
         })
         .catch(() => undefined);
@@ -323,6 +341,25 @@ export const RedrawPanel = () => {
     } catch (err) {
       setGrabError(
         `保存处理方式失败：${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  };
+
+  /** 切换主面板工作流并持久化；两套抓取产物互不相干，切换时清空。 */
+  const chooseWorkflow = async (next: PanelWorkflow) => {
+    if (next === workflow) return;
+    setWorkflow(next);
+    setCapture(null);
+    setRequest(null);
+    setExpandCapture(null);
+    setGrabError("");
+    setLimitNotice("");
+    try {
+      const settings = await loadSettings();
+      await saveSettings({ ...settings, panelWorkflow: next });
+    } catch (err) {
+      setGrabError(
+        `保存工作流失败：${err instanceof Error ? err.message : String(err)}`,
       );
     }
   };
@@ -407,7 +444,7 @@ export const RedrawPanel = () => {
     }
   };
 
-  /** 独立抓取：只捕获当前选区并刷新预览，不触发生成。 */
+  /** 独立抓取：按当前工作流捕获（选区 / 整画布）并刷新预览，不触发生成。 */
   const grab = async () => {
     setCaptureBusy(true);
     setGrabError("");
@@ -416,6 +453,10 @@ export const RedrawPanel = () => {
       const siliconed = getCatalogModel(settings.modelId).provider === "siliconed";
       setSiliconedSel(siliconed);
       setSiliconMode(settings.siliconedMode);
+      if (workflow === "expand") {
+        setExpandCapture(await captureExpandCanvas());
+        return;
+      }
       const c = await captureSelection({
         sizeMode: settings.sizeMode,
         fixedPresetId: settings.fixedPresetId,
@@ -446,6 +487,47 @@ export const RedrawPanel = () => {
       setGrabError(`读取设置失败：${err instanceof Error ? err.message : String(err)}`);
       return;
     }
+
+    // ---- 阔图工作流：仅 Siliconed，无选区 / 蒙版 / 模板 ----
+    if (workflow === "expand") {
+      const provider = getCatalogModel(settings.modelId).provider;
+      setSiliconedSel(provider === "siliconed");
+      if (provider !== "siliconed") {
+        setLimitNotice("扩图仅支持 Siliconed：请先在设置中切换模型");
+        return;
+      }
+      // 提示词是固定句子的补充，可留空（promptPolicy 对 expand 恒放行）
+      if (promptBlocksSubmit(provider, text, "expand")) {
+        setLimitNotice("请先填写提示词");
+        return;
+      }
+      let ec = expandCapture;
+      if (!ec) {
+        setCaptureBusy(true);
+        try {
+          ec = await captureExpandCanvas();
+        } catch (err) {
+          setCaptureBusy(false);
+          setGrabError(err instanceof Error ? err.message : String(err));
+          return;
+        }
+        setCaptureBusy(false);
+      }
+      try {
+        await enqueueExpandCapture({
+          prompt: text,
+          capture: ec,
+          settings,
+        });
+        // 释放面板内存中的大图；队列已持有落盘路径
+        setExpandCapture(null);
+        setLimitNotice("已加入队列");
+      } catch (err) {
+        setGrabError(err instanceof Error ? err.message : String(err));
+      }
+      return;
+    }
+
     const effective = applyGenerationOverride(settings, settingsOverride);
     const provider = getCatalogModel(effective.modelId).provider;
     const siliconed = provider === "siliconed";
@@ -559,9 +641,11 @@ export const RedrawPanel = () => {
             className="redraw-panel__prompt"
             value={prompt}
             placeholder={
-              siliconedSel
-                ? "留空则移除选区；填写要生成的内容则重绘"
-                : "描述想把选区改成什么，例如：把草地换成雪地"
+              workflow === "expand"
+                ? "补充提示词，可留空（先在 PS 用裁剪工具外扩画布）"
+                : siliconedSel
+                  ? "留空则移除选区；填写要生成的内容则重绘"
+                  : "描述想把选区改成什么，例如：把草地换成雪地"
             }
             oninput={(e) => setPrompt(e.target.value)}
             onchange={(e) => setPrompt(e.target.value)}
@@ -571,7 +655,7 @@ export const RedrawPanel = () => {
         </span>
       </div>
 
-      {templateRows.length > 0 && (
+      {workflow !== "expand" && templateRows.length > 0 && (
         <div className="redraw-panel__templates">
           {templateRows.map((row, ri) => (
             <div className="redraw-panel__template-row" key={ri}>
@@ -594,13 +678,33 @@ export const RedrawPanel = () => {
       <div className="redraw-panel__actions">
         <sp-button
           className="redraw-panel__secondary"
+          variant={workflow === "expand" ? "cta" : "secondary"}
+          quiet={workflow === "expand"}
+          selected={workflow === "expand"}
+          onclick={() =>
+            void chooseWorkflow(workflow === "expand" ? "selection" : "expand")
+          }
+          disabled={captureBusy}
+        >
+          {workflow === "expand" ? "扩图中（点击退出）" : "扩图"}
+        </sp-button>
+        <sp-button
+          className="redraw-panel__secondary"
           variant="secondary"
           onclick={grab}
           disabled={captureBusy}
         >
-          {captureBusy ? "抓取中…" : capture ? "重新抓取" : "抓取选区"}
+          {captureBusy
+            ? "抓取中…"
+            : workflow === "expand"
+              ? expandCapture
+                ? "重新抓取画布"
+                : "抓取画布"
+              : capture
+                ? "重新抓取"
+                : "抓取选区"}
         </sp-button>
-        {siliconedSel && (
+        {workflow === "selection" && siliconedSel && (
           <sp-picker
             className="redraw-panel__mode-select"
             style={{ width: "116px", minWidth: "116px" }}
@@ -631,7 +735,7 @@ export const RedrawPanel = () => {
         </sp-button>
       </div>
 
-      {siliconedSel && (
+      {workflow === "selection" && siliconedSel && (
         <span className="redraw-panel__hint">{modeHint}</span>
       )}
 
@@ -669,7 +773,36 @@ export const RedrawPanel = () => {
         </>
       )}
 
-      {capture && (
+      {workflow === "expand" && expandCapture && (
+        <div className="redraw-panel__sel">
+          <img
+            className="redraw-panel__sel-thumb"
+            src={`data:image/png;base64,${expandCapture.pngBase64}`}
+            alt="源图缩略图"
+          />
+          <span className="redraw-panel__sel-main">
+            <p className="redraw-panel__sel-text">
+              {expandCapture.docName} · 源图 {expandCapture.sendWidth}×{expandCapture.sendHeight}
+            </p>
+            <p className="redraw-panel__sel-sub">
+              {expandCapturePlanText(expandCapture)}
+            </p>
+            {expandCapture.warnings.length > 0 && (
+              <p className="redraw-panel__sel-sub">
+                {expandCapture.warnings.join("；")}
+              </p>
+            )}
+          </span>
+          <span
+            className="redraw-panel__sel-more"
+            onClick={() => setShowCaptureDetail(true)}
+          >
+            详情 ›
+          </span>
+        </div>
+      )}
+
+      {workflow === "selection" && capture && (
         <div className="redraw-panel__sel">
           <img
             className="redraw-panel__sel-thumb"
@@ -746,6 +879,15 @@ export const RedrawPanel = () => {
                     <span className="redraw-panel__item-mode">
                       平台 {providerLabel(e.providerId)}
                     </span>
+                    {e.workflow === "expand" && (
+                      <span className="redraw-panel__item-mode">扩图</span>
+                    )}
+                    {e.workflow === "expand" && e.expandPads && (
+                      <span className="redraw-panel__item-mode">
+                        pad {e.expandPads.left}/{e.expandPads.right}/
+                        {e.expandPads.top}/{e.expandPads.bottom}%
+                      </span>
+                    )}
                     {e.compute && (
                       <span className="redraw-panel__item-mode">
                         计算 {e.compute.actual}
@@ -885,7 +1027,43 @@ export const RedrawPanel = () => {
 
       {grabError && <p className="redraw-panel__error">⚠ {grabError}</p>}
 
-      {capture && showCaptureDetail && (
+      {workflow === "expand" && expandCapture && showCaptureDetail && (
+        <div className="redraw-panel__overlay">
+          <div className="redraw-panel__overlay-head">
+            <span className="redraw-panel__title">抓取详情</span>
+            <sp-button
+              className="redraw-panel__settings-btn"
+              quiet
+              onclick={() => setShowCaptureDetail(false)}
+            >
+              关闭
+            </sp-button>
+          </div>
+          <div className="redraw-panel__overlay-body">
+            <p className="redraw-panel__sel-sub">
+              {expandCapturePlanText(expandCapture)}
+            </p>
+            <p className="redraw-panel__sel-sub">
+              {expandCapture.docName} · 逻辑输出画布{" "}
+              {expandCapture.pads.logicalWidth}×{expandCapture.pads.logicalHeight}
+            </p>
+            {expandCapture.warnings.map((w, i) => (
+              <p key={`expand-warn-${i}`} className="redraw-panel__item-note">
+                {w}
+              </p>
+            ))}
+            <img
+              className="redraw-panel__preview"
+              style={previewSize(expandCapture.sendWidth, expandCapture.sendHeight, 260)}
+              src={`data:image/png;base64,${expandCapture.pngBase64}`}
+              alt="源图预览"
+            />
+            <p className="redraw-panel__preview-label">源图（非透明包围盒）</p>
+          </div>
+        </div>
+      )}
+
+      {workflow === "selection" && capture && showCaptureDetail && (
         <div className="redraw-panel__overlay">
           <div className="redraw-panel__overlay-head">
             <span className="redraw-panel__title">抓取详情</span>

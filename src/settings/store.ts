@@ -12,6 +12,10 @@ import {
   normalizePresetId,
   normalizeSizeMode,
 } from "../ps/presetFit";
+import {
+  normalizeExpandMaxSample,
+  normalizePanelWorkflow,
+} from "../ps/expandPlan";
 import { normalizePromptTemplates } from "./templates";
 import { DEFAULT_SETTINGS, RedrawSettings, TEMPLATE_SLOTS } from "./types";
 import { normalizeUpscaleLongSide } from "../core/upscalePlan";
@@ -140,6 +144,9 @@ export const loadSettings = async (): Promise<RedrawSettings> => {
     // 尺寸模式 / 固定预设做归一化：旧配置缺字段或存了非法值时回退默认
     merged.sizeMode = normalizeSizeMode(merged.sizeMode);
     merged.fixedPresetId = normalizePresetId(merged.fixedPresetId);
+    // 主面板工作流 / 扩图采样上限归一化（旧配置缺字段回退 selection / CLI 默认）
+    merged.panelWorkflow = normalizePanelWorkflow(merged.panelWorkflow);
+    merged.expandMaxSample = normalizeExpandMaxSample(merged.expandMaxSample);
     // 跨机设置做归一化：旧配置缺字段或存了非法值时回退「本机 + 自动切换」
     merged.siliconedComputeTarget = normalizeSiliconTarget(
       merged.siliconedComputeTarget,
