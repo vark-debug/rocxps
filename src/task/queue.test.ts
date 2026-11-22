@@ -2,10 +2,12 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  QUEUE_HARD_LIMIT,
   QUEUE_LIMIT,
   capacityForLane,
   classifyWaitOutcome,
-  findEvictableJob,
+  enforceHardLimitOnLoad,
+  findEvictableFinishedJob,
   isRetentionExpired,
   laneForJob,
   laneForProvider,
@@ -125,6 +127,27 @@ describe("queue 单飞调度选择", () => {
       ["a1"],
     );
   });
+
+  it("paused：生成任务（queued）全部跳过，自动贴回照常", () => {
+    const a = job({ id: "a", providerId: "ark", createdAt: 1 });
+    const place = job({ id: "p", status: "pendingPlace", autoPlace: true, createdAt: 2 });
+    const picked = selectRunnableJobs([a, place], {
+      active: {},
+      concurrency: 4,
+      paused: true,
+    });
+    assert.deepEqual(
+      picked.map((p) => p.id),
+      ["p"],
+      "暂停拦截出队（生成）但放行贴回",
+    );
+  });
+
+  it("paused 缺省（旧调用方）行为不变", () => {
+    const a = job({ id: "a", providerId: "ark", createdAt: 1 });
+    const picked = selectRunnableJobs([a], { active: {}, concurrency: 4 });
+    assert.deepEqual(picked.map((p) => p.id), ["a"]);
+  });
 });
 
 describe("queue 重试策略", () => {
@@ -215,21 +238,56 @@ describe("queue cancel / wait verdict 解析", () => {
 });
 
 describe("queue 裁剪与保留期", () => {
-  it("队列满时只淘汰最旧的终态项", () => {
+  it("淘汰位只取 completed / cancelled（failed 可重试，不参与淘汰）", () => {
     const jobs = [
       job({ id: "q0", createdAt: 0 }),
       job({ id: "q1", createdAt: 1, status: "completed" }),
       job({ id: "q2", createdAt: 2, status: "failed" }),
+      job({ id: "q3", createdAt: 3, status: "cancelled" }),
     ];
-    assert.equal(findEvictableJob(jobs)?.id, "q1", "终态里取最旧，先于 q2");
-    assert.equal(QUEUE_LIMIT, 20);
+    assert.equal(
+      findEvictableFinishedJob(jobs)?.id,
+      "q1",
+      "completed/cancelled 里取最旧，跳过 failed 与排队项",
+    );
+    assert.equal(QUEUE_LIMIT, 20, "终态保留上限");
+    assert.equal(QUEUE_HARD_LIMIT, 200, "失控保护总上限");
   });
 
-  it("全是非终态时没有可淘汰项（拒绝新入队，不挤掉排队/运行中的任务）", () => {
+  it("全是非终态时没有可淘汰项（不挤掉排队/运行中/失败的任务）", () => {
     const jobs = Array.from({ length: QUEUE_LIMIT }, (_, i) =>
       job({ id: `q${i}`, createdAt: i }),
     );
-    assert.equal(findEvictableJob(jobs), undefined);
+    assert.equal(findEvictableFinishedJob(jobs), undefined);
+  });
+
+  it("enforceHardLimitOnLoad：未执行项全保留，超限时先裁最旧终态", () => {
+    const many = Array.from({ length: 198 }, (_, i) =>
+      job({ id: `q${i}`, createdAt: 10 + i, status: "queued" }),
+    );
+    const withFinished = [
+      job({ id: "old-1", createdAt: 0, status: "completed" }),
+      job({ id: "old-2", createdAt: 1, status: "cancelled" }),
+      job({ id: "old-3", createdAt: 2, status: "completed" }),
+      job({ id: "old-4", createdAt: 3, status: "cancelled" }),
+      ...many,
+    ];
+    const trimmed = enforceHardLimitOnLoad(withFinished, 200);
+    assert.equal(trimmed.length, 200);
+    assert.ok(!trimmed.some((j) => j.id === "old-1"), "最旧终态先被裁（溢出 2 条）");
+    assert.ok(!trimmed.some((j) => j.id === "old-2"));
+    assert.ok(trimmed.some((j) => j.id === "old-3"), "未执行项全保留，终态裁到刚好为止");
+    assert.ok(trimmed.some((j) => j.id === "old-4"));
+    assert.ok(trimmed.some((j) => j.id === "q0"), "排队项一个不少");
+  });
+
+  it("enforceHardLimitOnLoad：裁完终态仍超出才从最旧截断（保底）", () => {
+    const many = Array.from({ length: 201 }, (_, i) =>
+      job({ id: `q${i}`, createdAt: 10 + i, status: "queued" }),
+    );
+    const trimmed = enforceHardLimitOnLoad(many, 200);
+    assert.equal(trimmed.length, 200);
+    assert.equal(trimmed[0].id, "q1", "无终态可裁时从最旧的排队项开始截断");
   });
 
   it("失败项 7 天后到期", () => {

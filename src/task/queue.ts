@@ -31,7 +31,14 @@ export type QueueStage = "queued" | "submitting" | "generating" | "placing";
 /** 单飞 lane：Siliconed / IOPaint 服务端串行；其他平台按设置并发；贴回单独一路。 */
 export type QueueLane = "siliconed" | "iopaint" | "network" | "place";
 
+/**
+ * 终态保留上限：completed / cancelled 超过该数量时入队自动淘汰最旧终态项。
+ * 注意：这不是总条数上限——queued / running / pendingPlace / failed 不受它约束
+ * （「未执行的不淘汰」，暂停队列场景允许连续入队大量积压任务）。
+ */
 export const QUEUE_LIMIT = 20;
+/** 失控保护总上限（正常触不到；磁盘字节上限 2GB 先于此到达）。 */
+export const QUEUE_HARD_LIMIT = 200;
 /** 失败 / 等待原文档的输入文件保留 7 天。 */
 export const FAILED_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 /** 自动重试最多 1 次，且只限「提交前还没拿到远端 job id 的 retryable」。 */
@@ -121,14 +128,14 @@ export interface QueueJob {
   appliedScale?: { x: number; y: number };
 }
 
-export const TERMINAL_QUEUE_STATUSES: readonly QueueStatus[] = [
+/** 可保留结果的任务终态（failed 可重试，算「未执行完」，不参与淘汰）。 */
+export const FINISHED_QUEUE_STATUSES: readonly QueueStatus[] = [
   "completed",
-  "failed",
   "cancelled",
 ];
 
-export const isTerminalQueueStatus = (status: QueueStatus): boolean =>
-  TERMINAL_QUEUE_STATUSES.includes(status);
+export const isFinishedQueueStatus = (status: QueueStatus): boolean =>
+  FINISHED_QUEUE_STATUSES.includes(status);
 
 /** 平台 → lane；Siliconed / IOPaint 单飞，其余归 network。 */
 export const laneForProvider = (providerId: ProviderId): QueueLane =>
@@ -188,12 +195,18 @@ export interface RunnableOptions {
   active: Readonly<Record<string, number>>;
   /** 生成并发数（network lane 容量）。 */
   concurrency: number;
+  /**
+   * 队列已暂停：生成任务（queued）不再选出，但照常入队；
+   * 贴回（place lane）不受影响——贴回是 PS 本地操作，不占生成资源。
+   * 正在执行的任务不中断（暂停只作用于还没启动的）。
+   */
+  paused?: boolean;
 }
 
 /**
  * 选出当前可以启动的任务（按创建时间从旧到新，FIFO）。
- * - queued → 平台 lane；
- * - pendingPlace 且 autoPlace === true → place lane；
+ * - queued → 平台 lane（paused 时跳过）；
+ * - pendingPlace 且 autoPlace === true → place lane（不受 paused 影响）；
  * - 某 lane 已满则跳过该项，继续尝试后面其他 lane 的项（不队头阻塞）。
  */
 export const selectRunnableJobs = (
@@ -206,6 +219,7 @@ export const selectRunnableJobs = (
   for (const job of sorted) {
     const placePhase = job.status === "pendingPlace";
     if (job.status !== "queued" && !(placePhase && job.autoPlace)) continue;
+    if (options.paused && !placePhase) continue;
     const lane = placePhase ? "place" : laneForProvider(job.providerId);
     const capacity = capacityForLane(lane, options.concurrency);
     if ((active[lane] ?? 0) >= capacity) continue;
@@ -343,15 +357,41 @@ export const classifyWaitOutcome = (
 /* ---------------- 队列裁剪 ---------------- */
 
 /**
- * 队列满时的淘汰位：只会返回最旧的终态项。
- * 没有终态项时不淘汰任何任务（拒绝新入队），避免把排队 / 运行中的任务挤掉。
+ * 终态保留上限的淘汰位：只返回最旧的 completed / cancelled 项。
+ * failed 可重试（未执行完），不参与淘汰；queued / running / pendingPlace 绝不淘汰。
+ * 没有可淘汰项时不淘汰任何任务——容量约束由调用方按硬上限另行处理。
  */
-export const findEvictableJob = (
+export const findEvictableFinishedJob = (
   jobs: readonly QueueJob[],
 ): QueueJob | undefined =>
   jobs
-    .filter((job) => isTerminalQueueStatus(job.status))
+    .filter((job) => isFinishedQueueStatus(job.status))
     .sort((a, b) => a.createdAt - b.createdAt)[0];
+
+/**
+ * 启动恢复时的总量保护（对应 add() 的硬上限）：
+ * 未执行项（queued/running/pendingPlace/failed）全保留；超出硬上限时先淘汰
+ * 最旧的 completed/cancelled，仍超出才按最旧截断（此时孤儿目录由 cleanOrphans 兜底）。
+ */
+export const enforceHardLimitOnLoad = (
+  jobs: readonly QueueJob[],
+  hardLimit = QUEUE_HARD_LIMIT,
+): QueueJob[] => {
+  const sorted = [...jobs].sort((a, b) => a.createdAt - b.createdAt);
+  if (sorted.length <= hardLimit) return [...jobs];
+  // 第一轮：只裁终态（completed/cancelled），保留全部未执行项
+  const out: QueueJob[] = [];
+  let overflow = sorted.length - hardLimit;
+  for (const job of sorted) {
+    if (overflow > 0 && isFinishedQueueStatus(job.status)) {
+      overflow -= 1;
+      continue;
+    }
+    out.push(job);
+  }
+  // 第二轮：裁完终态仍超出（极端场景）→ 从最旧截断保底；孤儿目录由 cleanOrphans 兜底
+  return overflow > 0 ? out.slice(overflow) : out;
+};
 
 /** 失败/取消项的输入文件是否已到保留期。 */
 export const isRetentionExpired = (

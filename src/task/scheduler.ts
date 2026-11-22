@@ -20,6 +20,8 @@ export interface QueueSchedulerHost {
   run: (job: QueueJob) => Promise<void>;
   /** network lane 的并发上限（实时读取设置）。 */
   concurrency: () => number;
+  /** 队列是否暂停（不执行新任务，仍照常入队）；缺省 false。 */
+  paused?: () => boolean;
   /** run 抛出未捕获错误时回调（正常应被 runner 内部吞掉并写状态）。 */
   onError?: (job: QueueJob, error: unknown) => void;
 }
@@ -51,6 +53,7 @@ export class QueueScheduler {
     const picks = selectRunnableJobs(jobs, {
       active: Object.fromEntries(this.active),
       concurrency: this.host.concurrency(),
+      paused: this.host.paused?.() ?? false,
     });
     for (const job of picks) {
       if (this.inFlight.has(job.id)) continue;

@@ -3,9 +3,11 @@ import type { ExpandCaptureResult } from "../ps/expandCapture";
 import type { QueueJob, QueueStatus } from "./queue";
 import {
   FAILED_RETENTION_MS,
+  QUEUE_HARD_LIMIT,
   QUEUE_LIMIT,
-  findEvictableJob,
-  isTerminalQueueStatus,
+  enforceHardLimitOnLoad,
+  findEvictableFinishedJob,
+  isFinishedQueueStatus,
 } from "./queue";
 
 /**
@@ -28,6 +30,8 @@ export const DEFAULT_QUEUE_DISK_LIMIT_BYTES = 2 * 1024 * 1024 * 1024;
 export interface QueueMeta {
   version: number;
   jobs: QueueJob[];
+  /** 队列暂停（不执行新任务，仍照常入队）；缺省 false（旧文件兼容）。 */
+  paused?: boolean;
 }
 
 const REQUIRED_JOB_FIELDS: Array<keyof QueueJob> = [
@@ -45,19 +49,29 @@ const REQUIRED_JOB_FIELDS: Array<keyof QueueJob> = [
 ];
 
 /** 序列化（紧凑 JSON：路径与元数据都很短，不需要缩进）。 */
-export const serializeQueue = (jobs: readonly QueueJob[]): string =>
-  JSON.stringify({ version: QUEUE_VERSION, jobs: [...jobs] } satisfies QueueMeta);
+export const serializeQueue = (
+  jobs: readonly QueueJob[],
+  paused = false,
+): string =>
+  JSON.stringify({
+    version: QUEUE_VERSION,
+    jobs: [...jobs],
+    paused,
+  } satisfies QueueMeta);
 
 /** 解析并过滤损坏条目：单条损坏不应让整个队列丢失。 */
-export const parseQueue = (text: string): QueueJob[] => {
+export const parseQueue = (
+  text: string,
+): { jobs: QueueJob[]; paused: boolean } => {
   let parsed: unknown;
   try {
     parsed = JSON.parse(text);
   } catch {
-    return [];
+    return { jobs: [], paused: false };
   }
   const raw = parsed as Partial<QueueMeta> | null;
-  if (!raw || typeof raw !== "object" || !Array.isArray(raw.jobs)) return [];
+  if (!raw || typeof raw !== "object" || !Array.isArray(raw.jobs))
+    return { jobs: [], paused: false };
   const jobs: QueueJob[] = [];
   for (const item of raw.jobs) {
     if (!item || typeof item !== "object") continue;
@@ -65,7 +79,7 @@ export const parseQueue = (text: string): QueueJob[] => {
     if (REQUIRED_JOB_FIELDS.some((field) => job[field] === undefined)) continue;
     jobs.push(job);
   }
-  return jobs;
+  return { jobs, paused: raw.paused === true };
 };
 
 /* ---------------- 磁盘清理计划（纯函数） ---------------- */
@@ -287,6 +301,8 @@ export type QueueListener = () => void;
  */
 export class QueueStore {
   private jobs: QueueJob[] = [];
+  /** 队列暂停（持久化于 queue.json；缺省 false 兼容旧文件）。 */
+  private paused = false;
   private listeners = new Set<QueueListener>();
   private queueFolder: UXPFolderLike | null = null;
   private rootFolder: UXPFolderLike | null = null;
@@ -330,12 +346,15 @@ export class QueueStore {
       const file = await this.rootFolder.getEntry(QUEUE_META_FILE);
       if (file) {
         const text = await file.read();
-        this.jobs = parseQueue(typeof text === "string" ? text : "");
+        const parsed = parseQueue(typeof text === "string" ? text : "");
+        this.jobs = parsed.jobs;
+        this.paused = parsed.paused;
       }
     } catch {
       this.jobs = [];
     }
-    this.jobs = recoverInterruptedJobs(this.jobs, Date.now()).slice(0, QUEUE_LIMIT);
+    // 恢复时不按旧 QUEUE_LIMIT 截断（未执行的不淘汰）；只做失控保护（超硬上限先裁终态）
+    this.jobs = enforceHardLimitOnLoad(recoverInterruptedJobs(this.jobs, Date.now()));
     await this.cleanOrphans();
     this.enforceDiskLimit(maxBytes);
     this.notify();
@@ -370,36 +389,58 @@ export class QueueStore {
         this.saveQueued = false;
         if (!this.rootFolder) return;
         const file = await this.rootFolder.createFile(QUEUE_META_FILE, { overwrite: true });
-        await file.write(serializeQueue(this.jobs));
+        await file.write(serializeQueue(this.jobs, this.paused));
       })
       .catch(() => undefined);
   }
 
-  /** 队列是否还能接纳新任务（满 20 条时只有存在终态项可淘汰才允许）。 */
+  /** 队列是否还能接纳新任务（终态项可自动淘汰腾位；仅失控保护硬上限会拒绝）。 */
   hasCapacity(): boolean {
-    return (
-      this.jobs.length < QUEUE_LIMIT ||
-      this.jobs.some((job) => isTerminalQueueStatus(job.status))
-    );
+    // 终态项总能被 add() 自动淘汰腾位，唯一拒绝条件是失控保护硬上限
+    return this.jobs.length < QUEUE_HARD_LIMIT;
   }
 
   add(job: QueueJob): void {
-    // 新项在前（UI 顺序）；超过上限时只淘汰最旧终态项，绝不挤掉排队 / 运行中的任务
+    // 新项在前（UI 顺序）。容量语义（「未执行的不淘汰，执行结束的淘汰」）：
+    // completed/cancelled 超过 QUEUE_LIMIT 时自动淘汰最旧；failed / 排队 / 运行中绝不淘汰；
+    // 只有总数超过 QUEUE_HARD_LIMIT 才拒绝入队（失控保护）。
     this.jobs = [job, ...this.jobs];
     if (this.jobs.length > QUEUE_LIMIT) {
-      const evictable = findEvictableJob(this.jobs);
-      if (!evictable) {
-        // 回滚并拒绝入队（调用方会提示用户先清理）
-        this.jobs = this.jobs.filter((item) => item.id !== job.id);
-        throw new Error(
-          `任务队列已满（${QUEUE_LIMIT} 条），请等待任务完成或清空已完成 / 已取消项`,
-        );
+      let finished = this.jobs.filter((item) => isFinishedQueueStatus(item.status));
+      while (finished.length > QUEUE_LIMIT) {
+        const evictable = findEvictableFinishedJob(this.jobs);
+        if (!evictable) break;
+        this.jobs = this.jobs.filter((item) => item.id !== evictable.id);
+        void this.removeFiles(evictable, { keepThumb: false });
+        finished = this.jobs.filter((item) => isFinishedQueueStatus(item.status));
       }
-      this.jobs = this.jobs.filter((item) => item.id !== evictable.id);
-      void this.removeFiles(evictable, { keepThumb: false });
+    }
+    if (this.jobs.length > QUEUE_HARD_LIMIT) {
+      // 回滚并拒绝入队（调用方会提示用户先执行或清理）
+      this.jobs = this.jobs.filter((item) => item.id !== job.id);
+      throw new Error(
+        `任务队列积压过多（超过 ${QUEUE_HARD_LIMIT} 条），请先执行或清理队列`,
+      );
     }
     this.notify();
     this.scheduleSave();
+  }
+
+  /** 队列是否暂停（不执行新任务，仍照常入队）。持久化在 queue.json。 */
+  isPaused(): boolean {
+    return this.paused;
+  }
+
+  setPaused(paused: boolean): void {
+    if (this.paused === paused) return;
+    this.paused = paused;
+    this.notify();
+    this.scheduleSave();
+  }
+
+  /** 排队中（尚未启动）的任务数——暂停按钮的积压显示。 */
+  pendingCount(): number {
+    return this.jobs.filter((job) => job.status === "queued").length;
   }
 
   update(id: string, patch: Partial<QueueJob>): QueueJob | undefined {

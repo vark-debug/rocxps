@@ -344,6 +344,26 @@ textarea {
   color: #b9b9b9;
 }
 
+// 条目右上角的删除叉：灰色小号 span（不用 sp-button——它自带 72px 最小宽与蓝色 accent，
+// 会与「重试 / 贴回」等操作按钮重叠）。无需二次确认；运行中/贴回中会先走安全取消。
+.redraw-panel__item-close {
+  position: absolute;
+  top: 1px;
+  right: 4px;
+  z-index: 1;
+  width: 14px;
+  height: 14px;
+  line-height: 13px;
+  text-align: center;
+  font-size: 10px;
+  color: #8a8a8a;
+  cursor: pointer;
+
+  &:hover {
+    color: #d4d4d4;
+  }
+}
+
 .redraw-panel__queue-list {
   flex: 1;
   min-height: 0;
@@ -401,6 +421,8 @@ textarea {
   border-radius: 4px;
   padding: 4px 6px;
   margin-bottom: 4px;
+  // 叉按钮绝对定位在右上角，需要定位上下文
+  position: relative;
   // 列表可滚动后禁止条目被压缩，保持内容原始高度
   flex: none;
 }
@@ -547,6 +569,8 @@ textarea {
 
 .redraw-panel__item-action {
   margin-left: 8px;
+  // 从条目右缘往左退 10px：给右上角的删除叉让出视觉空间（避免紧贴叉）
+  margin-right: 10px;
 }
 
 // ---- 设置二级面板 ----

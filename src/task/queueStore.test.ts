@@ -40,13 +40,22 @@ describe("queueStore 序列化", () => {
   it("round-trip 保留全部字段", () => {
     const jobs = [job({ id: "a", status: "failed", error: "网络错误" })];
     const parsed = parseQueue(serializeQueue(jobs));
-    assert.equal(parsed.length, 1);
-    assert.equal(parsed[0].id, "a");
-    assert.equal(parsed[0].error, "网络错误");
+    assert.equal(parsed.jobs.length, 1);
+    assert.equal(parsed.jobs[0].id, "a");
+    assert.equal(parsed.jobs[0].error, "网络错误");
+  });
+
+  it("暂停状态随队列持久化（缺省 false 兼容旧文件）", () => {
+    const jobs = [job({ id: "a" })];
+    assert.equal(parseQueue(serializeQueue(jobs)).paused, false);
+    assert.equal(parseQueue(serializeQueue(jobs, true)).paused, true);
+    // 旧文件无 paused 字段
+    const legacy = JSON.stringify({ version: 1, jobs: [] });
+    assert.equal(parseQueue(legacy).paused, false);
   });
 
   it("损坏 JSON / 缺字段条目被跳过，不拖垮整个队列", () => {
-    assert.deepEqual(parseQueue("{不是 json"), []);
+    assert.deepEqual(parseQueue("{不是 json").jobs, []);
     const text = JSON.stringify({
       version: 1,
       jobs: [{ id: "ok", prompt: "p", providerId: "ark", docId: 1, docName: "d",
@@ -55,7 +64,7 @@ describe("queueStore 序列化", () => {
         { id: "bad" }],
     });
     const parsed = parseQueue(text);
-    assert.deepEqual(parsed.map((j) => j.id), ["ok"]);
+    assert.deepEqual(parsed.jobs.map((j) => j.id), ["ok"]);
   });
 });
 

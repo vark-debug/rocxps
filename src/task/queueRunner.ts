@@ -18,7 +18,7 @@ import type { RedrawSettings } from "../settings/types";
 import { requestSizeFor } from "./pipeline";
 import {
   LOGICAL_CANCEL_GRACE_MS,
-  QUEUE_LIMIT,
+  QUEUE_HARD_LIMIT,
   laneForProvider,
   planCancel,
   planFailure,
@@ -441,6 +441,15 @@ export class QueueRunner {
 
   /* ---------------- 取消 ---------------- */
 
+  /**
+   * 设置队列暂停并唤醒调度器：恢复执行（false）时立即派发积压任务；
+   * 暂停（true）时不打断正在运行的任务。UI 不直接调 store，避免漏掉唤醒。
+   */
+  setPaused(paused: boolean): void {
+    this.store.setPaused(paused);
+    this.notify();
+  }
+
   async cancel(id: string): Promise<CancelOutcome> {
     const job = this.store.get(id);
     if (!job) return { kind: "cancelled", message: "任务不存在" };
@@ -781,6 +790,7 @@ export const queueStore = new QueueStore();
 export const queueScheduler = new QueueScheduler({
   getJobs: () => queueStore.list(),
   concurrency: () => concurrencyCache,
+  paused: () => queueStore.isPaused(),
   run: (job) => queueRunner.run(job),
   onError: () => undefined,
 });
@@ -840,7 +850,7 @@ export const enqueueCapture = async (options: EnqueueOptions): Promise<QueueJob>
   await queueStore.init();
   if (!queueStore.hasCapacity()) {
     throw new Error(
-      `任务队列已满（最多 ${QUEUE_LIMIT} 条），请等待任务完成或清空已完成 / 已取消项`,
+      `任务队列积压过多（超过 ${QUEUE_HARD_LIMIT} 条），请先执行或清理队列`,
     );
   }
   const model = getCatalogModel(settings.modelId);
@@ -912,7 +922,7 @@ export const enqueueExpandCapture = async (
   await queueStore.init();
   if (!queueStore.hasCapacity()) {
     throw new Error(
-      `任务队列已满（最多 ${QUEUE_LIMIT} 条），请等待任务完成或清空已完成 / 已取消项`,
+      `任务队列积压过多（超过 ${QUEUE_HARD_LIMIT} 条），请先执行或清理队列`,
     );
   }
   const model = getCatalogModel(settings.modelId);

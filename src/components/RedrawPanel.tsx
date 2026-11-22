@@ -243,6 +243,8 @@ export const RedrawPanel = () => {
   const [captureBusy, setCaptureBusy] = useState(false);
   const [grabError, setGrabError] = useState("");
   const [queue, setQueue] = useState<QueueJob[]>(() => queueStore.list());
+  /** 队列暂停状态（随 store 订阅同步；持久化在 queue.json）。 */
+  const [queuePaused, setQueuePaused] = useState(() => queueStore.isPaused());
   const [templates, setTemplates] = useState<PromptTemplate[]>([]);
   const [limitNotice, setLimitNotice] = useState("");
   /** 当前设置里的模型是否属于 Siliconed（决定空提示词与 1.4× 外扩是否启用）。 */
@@ -265,12 +267,24 @@ export const RedrawPanel = () => {
   const thumbCache = useRef<Record<string, string>>({});
   const [, setThumbVersion] = useState(0);
   const busy = queue.some(isActive);
+  /** 暂停期间尚未启动的任务数（「开始队列」按钮的积压显示）。 */
+  const pendingCount = queue.filter((e) => e.status === "queued").length;
+  const queueStatusSuffix = queuePaused
+    ? busy
+      ? " · 收尾中（渲染结束后暂停生效）"
+      : " · 已暂停"
+    : busy
+      ? " · 进行中"
+      : "";
   const tick = useTick(busy || upscaleBusy);
 
   // 队列运行时初始化 + 订阅；面板关闭不影响已入队任务
   useEffect(() => {
     void refreshQueueRuntime().catch(() => undefined);
-    return queueStore.subscribe(() => setQueue(queueStore.list()));
+    return queueStore.subscribe(() => {
+      setQueue(queueStore.list());
+      setQueuePaused(queueStore.isPaused());
+    });
   }, []);
 
   // 缩略图懒加载（结果大图不读回界面，只读小缩略图）
@@ -521,7 +535,9 @@ export const RedrawPanel = () => {
         });
         // 释放面板内存中的大图；队列已持有落盘路径
         setExpandCapture(null);
-        setLimitNotice("已加入队列");
+        setLimitNotice(
+          queueStore.isPaused() ? "已加入队列（队列已暂停）" : "已加入队列",
+        );
       } catch (err) {
         setGrabError(err instanceof Error ? err.message : String(err));
       }
@@ -574,7 +590,9 @@ export const RedrawPanel = () => {
       setCapture(null);
       setRequest(null);
       setShowCaptureDetail(false);
-      setLimitNotice("已加入队列");
+      setLimitNotice(
+        queueStore.isPaused() ? "已加入队列（队列已暂停）" : "已加入队列",
+      );
     } catch (err) {
       setGrabError(err instanceof Error ? err.message : String(err));
     }
@@ -602,6 +620,23 @@ export const RedrawPanel = () => {
   const cancelJob = async (id: string) => {
     const outcome = await queueRunner.cancel(id);
     setLimitNotice(outcome.message);
+  };
+
+  /**
+   * 叉按钮：无需确认直接删除。
+   * 终态与排队项直接移除（含文件清理）；运行中/贴回中先走安全取消
+   * （Siliconed 远端停止，否则删掉记录后远端仍在占用资源渲染），
+   * 取消后条目变为 cancelled，再点一次叉即可彻底移除。
+   */
+  const removeJob = async (id: string) => {
+    const job = queueStore.get(id);
+    if (!job) return;
+    if (job.status === "running" || job.status === "pendingPlace") {
+      await cancelJob(id);
+      return;
+    }
+    queueStore.remove(id);
+    void queueStore.removeFiles(job, { keepThumb: false });
   };
 
   const rePlace = async (id: string) => {
@@ -827,38 +862,55 @@ export const RedrawPanel = () => {
       )}
       </div>
 
-      {queue.length > 0 && (
-        <div
-          className={`redraw-panel__queue${queueCollapsed ? " redraw-panel__queue--collapsed" : ""}`}
-        >
-          <div className="redraw-panel__queue-head">
-            <span className="redraw-panel__queue-title">
-              任务队列（{queue.length}）{busy ? " · 进行中" : ""}
+      <div
+        className={`redraw-panel__queue${queueCollapsed ? " redraw-panel__queue--collapsed" : ""}`}
+      >
+        <div className="redraw-panel__queue-head">
+          <span className="redraw-panel__queue-title">
+            任务队列{queueStatusSuffix}
+          </span>
+          <span className="redraw-panel__queue-tools">
+            {/* 暂停 / 开始是全局执行开关：空队列时也要能看到（「先暂停再批量做选区」）。
+                走 queueRunner.setPaused 以同时唤醒调度器（恢复时立即派发积压任务）。 */}
+            <sp-button
+              className="redraw-panel__queue-clear"
+              quiet
+              onclick={() => queueRunner.setPaused(!queuePaused)}
+            >
+              {queuePaused
+                ? `开始队列${pendingCount > 0 ? `（${pendingCount}）` : ""}`
+                : "暂停队列"}
+            </sp-button>
+            <sp-button
+              className="redraw-panel__queue-clear"
+              quiet
+              onclick={() => {
+                queueStore.clearFinished();
+                setLimitNotice("已清空已完成 / 已取消项");
+              }}
+              disabled={busy}
+            >
+              清空已完成
+            </sp-button>
+            <span
+              className="redraw-panel__queue-toggle"
+              onClick={() => void toggleQueue()}
+            >
+              {queueCollapsed ? "展开 ⌄" : "收起 ⌃"}
             </span>
-            <span className="redraw-panel__queue-tools">
-              <sp-button
-                className="redraw-panel__queue-clear"
-                quiet
-                onclick={() => {
-                  queueStore.clearFinished();
-                  setLimitNotice("已清空已完成 / 已取消项");
-                }}
-                disabled={busy}
-              >
-                清空已完成
-              </sp-button>
-              <span
-                className="redraw-panel__queue-toggle"
-                onClick={() => void toggleQueue()}
-              >
-                {queueCollapsed ? "展开 ⌄" : "收起 ⌃"}
-              </span>
-            </span>
-          </div>
-          {!queueCollapsed && (
-            <div className="redraw-panel__queue-list">
+          </span>
+        </div>
+        {queue.length > 0 && !queueCollapsed && (
+          <div className="redraw-panel__queue-list">
             {queue.map((e) => (
               <div key={e.id} className="redraw-panel__item">
+                {/* 叉用 span 而非 sp-button：后者自带 72px 最小宽与蓝色 accent，会与右侧操作按钮重叠 */}
+                <span
+                  className="redraw-panel__item-close"
+                  onClick={() => void removeJob(e.id)}
+                >
+                  ✕
+                </span>
                 <span className="redraw-panel__item-slot">
                   <ItemSlot
                     job={e}
@@ -1022,8 +1074,7 @@ export const RedrawPanel = () => {
             ))}
             </div>
           )}
-        </div>
-      )}
+      </div>
 
       {grabError && <p className="redraw-panel__error">⚠ {grabError}</p>}
 
