@@ -27,10 +27,10 @@ import { DEFAULT_UPSCALE_LONG_SIDE } from "../core/upscalePlan";
 
 /**
  * 贴回模式：
- * - layerMask = 图层蒙版（默认）：整块贴回生成结果，并为结果图层创建真正的
+ * - layerMask = 图层蒙版：整块贴回生成结果，并为结果图层创建真正的
  *   （可在 PS 里继续编辑的）图层蒙版，白色显示区 = 原选区；
  * - mask = 像素蒙版合成：把原选区蒙版烘焙进结果 alpha，只显示选区内像素；
- * - block = 整块替换：不做任何选区约束，直接覆盖扩展区域。
+ * - block = 整块替换（默认）：不做任何选区约束，直接覆盖扩展区域。
  */
 export type PlaceBackMode = "layerMask" | "mask" | "block";
 
@@ -132,7 +132,7 @@ export const DEFAULT_SETTINGS: RedrawSettings = {
   concurrency: 2,
   sizeMode: DEFAULT_SIZE_MODE,
   fixedPresetId: DEFAULT_PRESET_ID,
-  placeBackMode: "layerMask",
+  placeBackMode: "block",
   watermark: false,
   promptSuffix: "保持选区外画面完全不变。",
   requestTimeoutMs: 300_000,
