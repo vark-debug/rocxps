@@ -117,4 +117,49 @@ describe("convertRgbaProPhotoToSrgb", () => {
     assert.equal(buf[3], 255);
     assert.deepEqual(Array.from(buf.slice(4)), [40, 50]);
   });
+
+  it("LUT 快速路径与精确标量管线误差 ≤ 1 字节（灰阶全采样 + 随机抽样）", () => {
+    const samples: Array<[number, number, number]> = [];
+    // 全 256 级灰阶（覆盖解码 LUT 全域与编码高光端）
+    for (let v = 0; v < 256; v++) samples.push([v, v, v]);
+    // LCG 确定性伪随机彩色抽样（覆盖色域内部、色域裁剪角落与线性段低光）
+    let seed = 0x2f6e2b1;
+    const next = () => {
+      seed = (seed * 1664525 + 1013904223) >>> 0;
+      return seed >>> 24;
+    };
+    for (let n = 0; n < 20000; n++) {
+      samples.push([next(), next(), next()]);
+    }
+    const fast = new Uint8Array(samples.length * 4);
+    samples.forEach(([r, g, b], i) => {
+      const p = i * 4;
+      fast[p] = r;
+      fast[p + 1] = g;
+      fast[p + 2] = b;
+      fast[p + 3] = 255;
+    });
+    convertRgbaProPhotoToSrgb(fast);
+    for (let i = 0; i < samples.length; i++) {
+      const [r, g, b] = proPhotoToSrgb(
+        samples[i][0] / 255,
+        samples[i][1] / 255,
+        samples[i][2] / 255,
+      );
+      const expected = [
+        Math.round(r * 255),
+        Math.round(g * 255),
+        Math.round(b * 255),
+      ];
+      for (let c = 0; c < 3; c++) {
+        const diff = Math.abs(fast[i * 4 + c] - expected[c]);
+        assert.ok(
+          diff <= 1,
+          `像素 ${i}（${samples[i].join(",")}）通道 ${c}：LUT ${
+            fast[i * 4 + c]
+          } vs 精确 ${expected[c]}`,
+        );
+      }
+    }
+  });
 });

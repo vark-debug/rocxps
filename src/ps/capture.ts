@@ -681,9 +681,12 @@ const readRegionRgbaTiled = async (
       if (!rgba) return null;
       // 回退读拿到的是文档原生色彩编码：宿主转换读被跳过，本地矩阵补转换。
       // 仅 ProPhoto 有矩阵实现；其他宽色域保留原值并记录（避免用错矩阵偏色）。
+      let convMs = 0;
       if (usedFallback && sourceProfile === "prophoto") {
+        const convT0 = Date.now();
         convertRgbaProPhotoToSrgb(rgba);
-        diagKey("回退路径本地色彩转换", { docId, tile });
+        convMs = Date.now() - convT0;
+        diagKey("回退路径本地色彩转换", { docId, tile, ms: convMs });
       } else if (usedFallback && options.colorProfile && !warnedSkipConvert) {
         warnedSkipConvert = true;
         diagKey("回退路径跳过本地色彩转换", {
@@ -712,6 +715,7 @@ const readRegionRgbaTiled = async (
         tile: { left: tile.left, top: tile.top },
         normalizeMs,
         rgbaMs,
+        convMs,
         blitMs: Date.now() - blitT0,
       });
     } finally {
