@@ -537,6 +537,12 @@ interface TileReadOptions {
   sourceProfile?: "prophoto";
   /** 只读取指定图层（超分用）；缺省读文档合成像素。 */
   layerID?: number;
+  /**
+   * 16 位文档实测：componentSize:8 转换读必抛 -32005 毒化错误（见 bitDepth.ts
+   * 与实测日志）。开局直接走原生位深回退，跳过注定失败的转换读宿主往返
+   *（每瓦片约 200ms，实测瓦片1「读取像素」236ms 中大头）。
+   */
+  skipConversionRead?: boolean;
 }
 
 /**
@@ -574,7 +580,13 @@ const readRegionRgbaTiled = async (
   // 回退记忆：转换读失败（如 16 位文档 -32005 毒化）通常在本会话持续，
   // 首块回退成功后其余瓦片直接走原生位深回退，省掉每块一次注定失败的
   // 转换读宿主往返（瓦片数越大节省越明显）。
-  let fallbackOnly = false;
+  let fallbackOnly = options.skipConversionRead === true;
+  if (fallbackOnly) {
+    diagKey("16 位文档跳过转换读，直接原生位深回退", {
+      docId,
+      tiles: tiles.length,
+    });
+  }
 
   for (const tile of tiles) {
     // 本瓦片是否走了原生位深回退（决定是否需要本地色彩转换）
@@ -622,7 +634,7 @@ const readRegionRgbaTiled = async (
         });
         usedFallback = true;
         fallbackTiles++;
-        if (!fallbackOnly) {
+        if (convertError && !fallbackOnly) {
           fallbackOnly = true;
           diagKey("转换读失败，本次读取改为原生位深回退", {
             docId,
@@ -659,8 +671,13 @@ const readRegionRgbaTiled = async (
             ...(img.componentSize === 16 ? { fullRange: false } : {}),
           }),
       );
+      // 瓦片后处理分段计时（实测路径A 696ms 中约 390ms 曾无日志入账）
+      const postT0 = Date.now();
       const data8 = normalizeToDepth8(raw, img.componentSize);
+      const normalizeMs = Date.now() - postT0;
+      const rgbaT0 = Date.now();
       const rgba = toRgba(data8, img.width, img.height);
+      const rgbaMs = Date.now() - rgbaT0;
       if (!rgba) return null;
       // 回退读拿到的是文档原生色彩编码：宿主转换读被跳过，本地矩阵补转换。
       // 仅 ProPhoto 有矩阵实现；其他宽色域保留原值并记录（避免用错矩阵偏色）。
@@ -674,6 +691,7 @@ const readRegionRgbaTiled = async (
           colorProfile: options.colorProfile,
         });
       }
+      const blitT0 = Date.now();
       if (requireOpaque) {
         for (let i = 3; i < rgba.length; i += 4) {
           if (rgba[i] < 255) return null;
@@ -689,8 +707,19 @@ const readRegionRgbaTiled = async (
         sb.left - bounds.left,
         sb.top - bounds.top,
       );
+      diagKey("瓦片后处理", {
+        docId,
+        tile: { left: tile.left, top: tile.top },
+        normalizeMs,
+        rgbaMs,
+        blitMs: Date.now() - blitT0,
+      });
     } finally {
+      const disposeT0 = Date.now();
       img.dispose();
+      const disposeMs = Date.now() - disposeT0;
+      // dispose 疑似宿主同步开销（首瓦片实测远高于后瓦片），超阈值才记录防刷屏
+      if (disposeMs >= 20) diagKey("imageData dispose 耗时", { docId, disposeMs });
     }
   }
   diagKey("分块读取完成", {
@@ -762,6 +791,7 @@ const pixelReadOptions = (
     ...(bitDepth.includes("16") || bitDepth.includes("32")
       ? { componentSize: 8 as const }
       : {}),
+    ...(bitDepth.includes("16") ? { skipConversionRead: true as const } : {}),
     ...(isWideGamut
       ? { colorSpace: "RGB" as const, colorProfile: "sRGB IEC61966-2.1" }
       : {}),
