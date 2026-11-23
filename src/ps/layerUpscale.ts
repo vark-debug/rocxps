@@ -5,7 +5,8 @@ import {
   type ContentUpscalePlan,
 } from "../core/upscalePlan";
 import { bytesToBase64 } from "../providers/http";
-import { padToSize, readLayerRgba, uint8ToBase64 } from "./capture";
+import { uint8ToBase64 } from "./base64";
+import { padToSize, readLayerRgba } from "./capture";
 import { decodeImageBytes } from "./imageDecode";
 import { encodePng } from "./pngEncoder";
 import { readSmartObjectContent } from "./smartObject";
