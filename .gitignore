@@ -31,8 +31,8 @@ zip
 
 src/hybrid/win/.vs
 
-# UXP Hybrid addon 的 CMake 构建目录（产物在 public-hybrid/，需随包分发）
-native/SiliconedBridge/build/
+# UXP Hybrid addon 源码不上传（产物 .uxpaddon 在 public-hybrid/，需随包分发）
+native/
 
 .env
 scripts/mac-sign.sh
