@@ -10,8 +10,15 @@ import {
   parseComponentDepth,
   scaleSamplesToDepth,
 } from "./bitDepth";
-import { BUILD_STAMP, diagKey, ensureDiagSession, errText } from "./placeBackDiag";
+import {
+  BUILD_STAMP,
+  diagKey,
+  ensureDiagSession,
+  errText,
+  isDiagEnabled,
+} from "./placeBackDiag";
 import { encodePng } from "./pngEncoder";
+import { uint8ToBase64 } from "./base64";
 import { resizeGray, resizeRgba } from "./resize";
 import {
   MAX_TILE_PIXELS,
@@ -169,13 +176,20 @@ const appVersion = (): string => {
   }
 };
 
-/** 为每一步包裹步骤名，失败时横幅可直接定位到具体环节（附 PS 版本便于排障）。 */
+/**
+ * 为每一步包裹步骤名，失败时横幅可直接定位到具体环节（附 PS 版本便于排障）。
+ * 每步耗时进关键事件环（「阶段耗时」），捕获周期慢时按毫秒数对号入座。
+ */
 const step = async <T>(name: string, fn: () => Promise<T> | T): Promise<T> => {
+  const t0 = Date.now();
   try {
     return await fn();
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
+    diagKey("阶段失败", { name, ms: Date.now() - t0, error: msg });
     throw new Error(`[捕获:${name}] ${msg}（PS ${appVersion()}）`);
+  } finally {
+    diagKey("阶段耗时", { name, ms: Date.now() - t0 });
   }
 };
 
@@ -370,30 +384,6 @@ const selectRectDesc = (b: Rect): ActionDescriptor => ({
 });
 
 /**
- * Uint8Array → base64（无 data: 前缀）。
- * 分块 btoa：单块 1MB（且为 3 的倍数，保证各块 base64 可直接拼接），
- * 避免对数十 MB 字符串一次性 btoa / 一次性构造数百 MB 的 binary 中间串。
- */
-const BASE64_CHUNK = 1_048_575; // 3 的倍数：349525 × 3
-
-export const uint8ToBase64 = (bytes: Uint8Array): string => {
-  const parts: string[] = [];
-  for (let offset = 0; offset < bytes.length; offset += BASE64_CHUNK) {
-    const slice = bytes.subarray(
-      offset,
-      Math.min(offset + BASE64_CHUNK, bytes.length),
-    );
-    // String.fromCharCode 参数过大会爆栈：每片 8192 字节再拼 binary
-    const codes: string[] = [];
-    for (let i = 0; i < slice.length; i += 0x2000) {
-      codes.push(String.fromCharCode(...slice.subarray(i, i + 0x2000)));
-    }
-    parts.push(btoa(codes.join("")));
-  }
-  return parts.join("");
-};
-
-/**
  * 蒙版 → 黑白通道图 PNG base64：灰度值复制到 RGB 三通道（alpha=255），
  * 复用现有 RGBA 编码器，保证与内容图同一种 PNG 形态，避免 API 端解码差异。
  * 白 = 选区内（待重绘），黑 = 选区外（保留）；羽化选区边缘为过渡灰度。
@@ -547,6 +537,12 @@ interface TileReadOptions {
   sourceProfile?: "prophoto";
   /** 只读取指定图层（超分用）；缺省读文档合成像素。 */
   layerID?: number;
+  /**
+   * 16 位文档实测：componentSize:8 转换读必抛 -32005 毒化错误（见 bitDepth.ts
+   * 与实测日志）。开局直接走原生位深回退，跳过注定失败的转换读宿主往返
+   *（每瓦片约 200ms，实测瓦片1「读取像素」236ms 中大头）。
+   */
+  skipConversionRead?: boolean;
 }
 
 /**
@@ -578,57 +574,84 @@ const readRegionRgbaTiled = async (
   const dstH = bounds.bottom - bounds.top;
   const dst = new Uint8Array(dstW * dstH * 4);
 
-  for (const tile of planTiles(bounds, MAX_TILE_PIXELS)) {
+  const tiles = planTiles(bounds, MAX_TILE_PIXELS);
+  const readT0 = Date.now();
+  let fallbackTiles = 0;
+  // 回退记忆：转换读失败（如 16 位文档 -32005 毒化）通常在本会话持续，
+  // 首块回退成功后其余瓦片直接走原生位深回退，省掉每块一次注定失败的
+  // 转换读宿主往返（瓦片数越大节省越明显）。
+  let fallbackOnly = options.skipConversionRead === true;
+  if (fallbackOnly) {
+    diagKey("16 位文档跳过转换读，直接原生位深回退", {
+      docId,
+      tiles: tiles.length,
+    });
+  }
+
+  for (const tile of tiles) {
     // 本瓦片是否走了原生位深回退（决定是否需要本地色彩转换）
     let usedFallback = false;
     const pixels = await step("读取像素", async () => {
-      try {
-        return await imaging.getPixels({
-          documentID: docId,
-          sourceBounds: {
-            left: tile.left,
-            top: tile.top,
-            right: tile.right,
-            bottom: tile.bottom,
-          },
-          ...getPixelsOptions,
-        });
-      } catch (e) {
-        diagKey("读取像素失败", {
-          docId,
-          requireOpaque,
-          tile,
-          options,
-          error: errText(e),
-        });
-        // 原生位深回退：转换读（componentSize / 色彩配置转换）可能在本会话
-        // 失败（16 位文档实测 -32005 毒化错误），去掉转换参数按文档原生位深
-        // 重读、本地归一化。保留 layerID（单图层读数路径），只丢位深/色彩转换。
+      let convertError: unknown = null;
+      if (!fallbackOnly) {
         try {
-          const fallback = await imaging.getPixels({
+          return await imaging.getPixels({
             documentID: docId,
-            ...(getPixelsOptions.layerID
-              ? { layerID: getPixelsOptions.layerID }
-              : {}),
             sourceBounds: {
               left: tile.left,
               top: tile.top,
               right: tile.right,
               bottom: tile.bottom,
             },
+            ...getPixelsOptions,
           });
-          usedFallback = true;
-          diagKey("原生位深回退成功", {
+        } catch (e) {
+          convertError = e;
+          diagKey("读取像素失败", {
             docId,
+            requireOpaque,
             tile,
-            componentSize: fallback.imageData.componentSize,
-            components: fallback.imageData.components,
+            options,
+            error: errText(e),
           });
-          return fallback;
-        } catch (e2) {
-          diagKey("原生位深回退失败", { docId, tile, error: errText(e2) });
-          throw e;
+          // 原生位深回退：转换读（componentSize / 色彩配置转换）可能在本会话
+          // 失败（16 位文档实测 -32005 毒化错误），去掉转换参数按文档原生位深
+          // 重读、本地归一化。保留 layerID（单图层读数路径），只丢位深/色彩转换。
         }
+      }
+      try {
+        const fallback = await imaging.getPixels({
+          documentID: docId,
+          ...(getPixelsOptions.layerID
+            ? { layerID: getPixelsOptions.layerID }
+            : {}),
+          sourceBounds: {
+            left: tile.left,
+            top: tile.top,
+            right: tile.right,
+            bottom: tile.bottom,
+          },
+        });
+        usedFallback = true;
+        fallbackTiles++;
+        if (convertError && !fallbackOnly) {
+          fallbackOnly = true;
+          diagKey("转换读失败，本次读取改为原生位深回退", {
+            docId,
+            tiles: tiles.length,
+          });
+        }
+        diagKey("原生位深回退成功", {
+          docId,
+          tile,
+          componentSize: fallback.imageData.componentSize,
+          components: fallback.imageData.components,
+        });
+        return fallback;
+      } catch (e2) {
+        diagKey("原生位深回退失败", { docId, tile, error: errText(e2) });
+        // 两个通道都失败时优先抛转换读原始错误（保持既有排障语义）
+        throw convertError ?? e2;
       }
     });
     const img = pixels.imageData;
@@ -648,14 +671,22 @@ const readRegionRgbaTiled = async (
             ...(img.componentSize === 16 ? { fullRange: false } : {}),
           }),
       );
+      // 瓦片后处理分段计时（实测路径A 696ms 中约 390ms 曾无日志入账）
+      const postT0 = Date.now();
       const data8 = normalizeToDepth8(raw, img.componentSize);
+      const normalizeMs = Date.now() - postT0;
+      const rgbaT0 = Date.now();
       const rgba = toRgba(data8, img.width, img.height);
+      const rgbaMs = Date.now() - rgbaT0;
       if (!rgba) return null;
       // 回退读拿到的是文档原生色彩编码：宿主转换读被跳过，本地矩阵补转换。
       // 仅 ProPhoto 有矩阵实现；其他宽色域保留原值并记录（避免用错矩阵偏色）。
+      let convMs = 0;
       if (usedFallback && sourceProfile === "prophoto") {
+        const convT0 = Date.now();
         convertRgbaProPhotoToSrgb(rgba);
-        diagKey("回退路径本地色彩转换", { docId, tile });
+        convMs = Date.now() - convT0;
+        diagKey("回退路径本地色彩转换", { docId, tile, ms: convMs });
       } else if (usedFallback && options.colorProfile && !warnedSkipConvert) {
         warnedSkipConvert = true;
         diagKey("回退路径跳过本地色彩转换", {
@@ -663,6 +694,7 @@ const readRegionRgbaTiled = async (
           colorProfile: options.colorProfile,
         });
       }
+      const blitT0 = Date.now();
       if (requireOpaque) {
         for (let i = 3; i < rgba.length; i += 4) {
           if (rgba[i] < 255) return null;
@@ -678,10 +710,28 @@ const readRegionRgbaTiled = async (
         sb.left - bounds.left,
         sb.top - bounds.top,
       );
+      diagKey("瓦片后处理", {
+        docId,
+        tile: { left: tile.left, top: tile.top },
+        normalizeMs,
+        rgbaMs,
+        convMs,
+        blitMs: Date.now() - blitT0,
+      });
     } finally {
+      const disposeT0 = Date.now();
       img.dispose();
+      const disposeMs = Date.now() - disposeT0;
+      // dispose 疑似宿主同步开销（首瓦片实测远高于后瓦片），超阈值才记录防刷屏
+      if (disposeMs >= 20) diagKey("imageData dispose 耗时", { docId, disposeMs });
     }
   }
+  diagKey("分块读取完成", {
+    docId,
+    tiles: tiles.length,
+    fallbackTiles,
+    ms: Date.now() - readT0,
+  });
   return dst;
 };
 
@@ -745,6 +795,7 @@ const pixelReadOptions = (
     ...(bitDepth.includes("16") || bitDepth.includes("32")
       ? { componentSize: 8 as const }
       : {}),
+    ...(bitDepth.includes("16") ? { skipConversionRead: true as const } : {}),
     ...(isWideGamut
       ? { colorSpace: "RGB" as const, colorProfile: "sRGB IEC61966-2.1" }
       : {}),
@@ -1073,8 +1124,9 @@ export const captureSelection = async (
   const expandFactor = options.expandFactor ?? 1;
   return photoshop.core.executeAsModal(
     async (executionContext) => {
+      const captureT0 = Date.now();
       // 自愈：先清掉历史失败运行留下的孤儿临时文档，再读主文档
-      await closeOrphanTempDocs();
+      await step("清理孤儿临时文档", () => closeOrphanTempDocs());
       const doc = photoshop.app.activeDocument;
       if (!doc) throw new Error("请先打开一个文档");
       ensureDiagSession();
@@ -1085,14 +1137,18 @@ export const captureSelection = async (
       });
       // 诊断探针：AM 视角逐层读取 smartObject 属性，与 DOM kind 清单交叉验证
       //（-32005 报「无法更新智能对象文件」而 DOM 全部 kind:"pixel"，需引擎定论）
-      try {
-        await probeSmartObjects(doc);
-      } catch {
-        /* 探针失败不影响主流程 */
+      // N 层 = N 次 batchPlay 宿主往返，图层多时显著拖慢捕获周期：
+      // 该 bug 已定论（位深回退修复），探针只在诊断开关开启时执行。
+      if (isDiagEnabled()) {
+        try {
+          await step("智能对象探针", () => probeSmartObjects(doc));
+        } catch {
+          /* 探针失败不影响主流程 */
+        }
       }
 
       // 1. 原选区 bounds（改选区前读取）
-      const selection = await readSelection();
+      const selection = await step("读取选区", () => readSelection());
       if (!selection) throw new Error("请先创建一个选区");
       const sel = selection.bounds;
       const selW = sel.right - sel.left;
@@ -1219,8 +1275,9 @@ export const captureSelection = async (
       // 4. 像素捕获：路径 A（零命令直读）优先；异常/透明/非 RGB → 路径 B（DOM 临时文档）
       let pixels: Uint8Array | null = null;
       let directError: string | null = null;
+      let capturePath: "A" | "B" = "A";
       try {
-        pixels = await readMergedPixelsDirect(doc, clip);
+        pixels = await step("路径A直读", () => readMergedPixelsDirect(doc, clip));
       } catch (e) {
         directError = e instanceof Error ? e.message : String(e);
         diagKey("直读失败", { error: directError });
@@ -1233,11 +1290,10 @@ export const captureSelection = async (
         }
       }
       if (pixels === null) {
+        capturePath = "B";
         try {
-          pixels = await captureRgbaViaTempDoc(
-            doc,
-            clip,
-            executionContext.hostControl,
+          pixels = await step("路径B临时文档", () =>
+            captureRgbaViaTempDoc(doc, clip, executionContext.hostControl),
           );
         } catch (e) {
           const msg = e instanceof Error ? e.message : String(e);
@@ -1253,6 +1309,7 @@ export const captureSelection = async (
       //    像素在内存里延展，整张图只在最后编码一次 PNG（旧实现会先编码、
       //    再解码、再编码，超宽画布下多出两份 64MB 级缓冲）。
       if (expanded.padInfo) {
+        const extendT0 = Date.now();
         mask = extendMaskToRegion(
           mask,
           expanded.width,
@@ -1269,6 +1326,7 @@ export const captureSelection = async (
           offX,
           offY,
         );
+        diagKey("阶段耗时", { name: "补边延展", ms: Date.now() - extendT0 });
       }
       // 5.1 短边自动补全：把补出来的两条短边带写进蒙版白区，
       //     让 CLI 依据蒙版 bbox 裁出的块短边真正变宽。
@@ -1286,17 +1344,28 @@ export const captureSelection = async (
         assertPresetSendSize(sendWidth, sendHeight, preset);
         if (expanded.width !== sendWidth || expanded.height !== sendHeight) {
           sendPixels = await step("缩放到预设尺寸", () =>
-            resizeRgba(pixels, expanded.width, expanded.height, sendWidth, sendHeight),
+            resizeRgba(
+              pixels,
+              expanded.width,
+              expanded.height,
+              sendWidth,
+              sendHeight,
+              // 路径 A 的 requireOpaque 逐瓦片扫描保证 alpha 全 255
+              //（补边为边缘复制），预乘/反预乘逐位恒等，可安全跳过
+              capturePath === "A",
+            ),
           );
           sendMask = {
             width: sendWidth,
             height: sendHeight,
-            data: resizeGray(
-              mask.data,
-              mask.width,
-              mask.height,
-              sendWidth,
-              sendHeight,
+            data: await step("缩放蒙版", () =>
+              resizeGray(
+                mask.data,
+                mask.width,
+                mask.height,
+                sendWidth,
+                sendHeight,
+              ),
             ),
           };
         }
@@ -1314,13 +1383,22 @@ export const captureSelection = async (
         );
       }
 
-      const pngBase64 = await step("编码 PNG", () =>
-        uint8ToBase64(encodePng(sendWidth, sendHeight, sendPixels)),
+      const pngBytes = await step("编码 PNG", () =>
+        encodePng(sendWidth, sendHeight, sendPixels),
       );
+      const pngBase64 = await step("base64 编码", () => uint8ToBase64(pngBytes));
       // 同步编码黑白通道图（供生成请求使用；贴回继续用原始灰度 mask）
       const maskPngBase64 = await step("编码蒙版 PNG", () =>
         encodeMaskPngBase64(sendMask),
       );
+
+      diagKey("捕获完成", {
+        totalMs: Date.now() - captureT0,
+        path: capturePath,
+        sendWidth,
+        sendHeight,
+        pngBase64Length: pngBase64.length,
+      });
 
       return {
         docId: doc.id,

@@ -102,18 +102,41 @@ export const proPhotoToSrgb = (
 };
 
 /**
+ * 查表加速：解码侧 8 位输入恰为 256 个离散值，模块加载时预计算全部精确解码
+ * 结果（Float64，零精度损失）；编码侧把线性值按 2^16 桶预量化（桶间距
+ * 1/65536，sRGB 编码斜率最大 12.92，字节级量化误差 < 0.05，加末尾取整
+ * 合计与精确管线差 ≤ 1 字节）。热路径无 Math.pow、无元组分配。
+ */
+const DECODE8 = new Float64Array(256);
+for (let i = 0; i < 256; i++) {
+  DECODE8[i] = decodeProPhoto(i / 255);
+}
+
+const ENCODE_LUT = new Uint8Array((1 << 16) + 1);
+for (let k = 0; k <= 1 << 16; k++) {
+  const v = 255 * encodeSrgb(k / 65536);
+  ENCODE_LUT[k] = v < 0 ? 0 : v > 255 ? 255 : Math.round(v);
+}
+
+/**
  * RGBA8 缓冲就地转换：按 ProPhoto 解释 RGB 通道并转为 sRGB 编码，
  * alpha 通道不动。capture 原生位深回退路径专用（见 capture.ts）。
+ * 紧凑内联循环：3 次解码查表 + 9 乘 6 加 + 3 次编码查表，无逐像素分配。
  */
 export const convertRgbaProPhotoToSrgb = (rgba: Uint8Array): void => {
+  const m = LINEAR_PRO_PHOTO_TO_SRGB;
   for (let i = 0; i + 2 < rgba.length; i += 4) {
-    const [r, g, b] = proPhotoToSrgb(
-      rgba[i] / 255,
-      rgba[i + 1] / 255,
-      rgba[i + 2] / 255,
-    );
-    rgba[i] = Math.round(r * 255);
-    rgba[i + 1] = Math.round(g * 255);
-    rgba[i + 2] = Math.round(b * 255);
+    const lr = DECODE8[rgba[i]];
+    const lg = DECODE8[rgba[i + 1]];
+    const lb = DECODE8[rgba[i + 2]];
+    let lin = m[0] * lr + m[1] * lg + m[2] * lb;
+    lin = lin < 0 ? 0 : lin > 1 ? 1 : lin;
+    rgba[i] = ENCODE_LUT[(lin * 65536 + 0.5) | 0];
+    lin = m[3] * lr + m[4] * lg + m[5] * lb;
+    lin = lin < 0 ? 0 : lin > 1 ? 1 : lin;
+    rgba[i + 1] = ENCODE_LUT[(lin * 65536 + 0.5) | 0];
+    lin = m[6] * lr + m[7] * lg + m[8] * lb;
+    lin = lin < 0 ? 0 : lin > 1 ? 1 : lin;
+    rgba[i + 2] = ENCODE_LUT[(lin * 65536 + 0.5) | 0];
   }
 };

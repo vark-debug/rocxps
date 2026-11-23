@@ -1,7 +1,8 @@
 import { photoshop } from "../globals";
 import { encodePng } from "./pngEncoder";
 import { MAX_TILE_PIXELS, planTiles, toRgba } from "./tileRead";
-import { readDocPath, readDocumentRgba, toPx, uint8ToBase64 } from "./capture";
+import { uint8ToBase64 } from "./base64";
+import { readDocPath, readDocumentRgba, toPx } from "./capture";
 import {
   accumulateAlphaBounds,
   accumulateBackgroundColor,

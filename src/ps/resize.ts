@@ -13,8 +13,8 @@
  * 预乘缩放保证半透明像素缩放时 RGB 不再与 alpha 独立混色，透明边缘不会发暗/发亮。
  * 本实现恒为「水平 → 垂直」两遍；Pillow 仅在纵向缩幅 > 2× 横向缩幅时为提速先跑
  * 垂直遍，该场景两者仅差中间量化的 ±1 舍入。
- * 两遍之间的行缓存用滑动窗口（只保留当前纵向核窗口内的已滤波行），
- * 超大选区（5000² 级）内存仍为常量级；蒙版合成在缩放后（RGB 已反预乘）。
+ * 两遍之间的行缓存用环形缓冲（容量 = 纵向核最大窗口长度，只保留当前
+ * 纵向核窗口内的已滤波行），超大选区（5000² 级）内存仍为常量级；蒙版合成在缩放后（RGB 已反预乘）。
  */
 
 /** Lanczos-3 核：sinc(x)·sinc(x/3)，|x| ≥ 3 截断为 0。 */
@@ -84,13 +84,20 @@ const mulDiv255 = (a: number, b: number): number => {
   return ((t >> 8) + t) >> 8;
 };
 
-/** RGBA8 高质量缩放（预乘 + 分离两遍 Lanczos3，与 Pillow LANCZOS 一致）。 */
+/**
+ * RGBA8 高质量缩放（预乘 + 分离两遍 Lanczos3，与 Pillow LANCZOS 一致）。
+ * opaqueHint：调用方保证源 alpha 全 255（capture 路径 A 的 requireOpaque
+ * 逐瓦片扫描 + 补边为边缘复制）。此时预乘/反预乘均为逐位恒等（alpha 255
+ * 时 MULDIV255 恒等、rgba2rgbA 直通），可跳过两遍扫描并免掉源缓冲拷贝；
+ * hint 不成立则半透明结果错误，调用方必须自行保证。
+ */
 export const resizeRgba = (
   src: Uint8Array,
   sw: number,
   sh: number,
   dw: number,
   dh: number,
+  opaqueHint = false,
 ): Uint8Array => {
   if (sw <= 0 || sh <= 0 || dw <= 0 || dh <= 0) {
     throw new Error("缩放：尺寸非法");
@@ -105,13 +112,16 @@ export const resizeRgba = (
   }
 
   // 1. 预乘 alpha：RGBa = RGB × alpha / 255（alpha 255 时 MULDIV255 恒等，可跳过）
-  const prem = new Uint8Array(src);
-  for (let p = 0; p < prem.length; p += 4) {
-    const a = prem[p + 3];
-    if (a !== 255) {
-      prem[p] = mulDiv255(prem[p], a);
-      prem[p + 1] = mulDiv255(prem[p + 1], a);
-      prem[p + 2] = mulDiv255(prem[p + 2], a);
+  let prem = src;
+  if (!opaqueHint) {
+    prem = new Uint8Array(src);
+    for (let p = 0; p < prem.length; p += 4) {
+      const a = prem[p + 3];
+      if (a !== 255) {
+        prem[p] = mulDiv255(prem[p], a);
+        prem[p + 1] = mulDiv255(prem[p + 1], a);
+        prem[p + 2] = mulDiv255(prem[p + 2], a);
+      }
     }
   }
 
@@ -119,15 +129,20 @@ export const resizeRgba = (
   const kx = sameW ? null : buildKernels(sw, dw);
   const ky = buildKernels(sh, dh);
 
-  // 滑动窗口行缓存：只保留纵向核窗口内已滤波的源行（字节精度，同 Pillow 中间图像）
-  const rowCache = new Map<number, Uint8Array>();
+  // 环形行缓存：容量 = 纵向核最大窗口长度，槽位 = 源行号 % 容量。
+  // 纵向核窗口起点随 y 单调不减且窗口长度 ≤ 容量，故槽位被新行覆写时
+  // 原行必已滑出当前及后续所有窗口；超大选区（5000² 级）内存仍为常量级。
+  let cap = 1;
+  for (let y = 0; y < dh; y++) {
+    if (ky[y].weights.length > cap) cap = ky[y].weights.length;
+  }
+  const ring: Uint8Array[] = new Array(cap);
+  const rows: Uint8Array[] = new Array(cap);
   let nextRow = 0;
   const filterRow = (sy: number): Uint8Array => {
+    // 等宽直通行：零拷贝视图（源缓冲在两遍间只读）
+    if (sameW) return prem.subarray(sy * sw * 4, (sy + 1) * sw * 4);
     const r = new Uint8Array(dw * 4);
-    if (sameW) {
-      r.set(prem.subarray(sy * sw * 4, (sy + 1) * sw * 4));
-      return r;
-    }
     const base = sy * sw * 4;
     for (let x = 0; x < dw; x++) {
       const k = kx![x];
@@ -158,18 +173,14 @@ export const resizeRgba = (
     const k = ky[y];
     const end = k.start + k.weights.length;
     for (let r = nextRow; r < end; r++) {
-      rowCache.set(r, filterRow(r));
+      ring[r % cap] = filterRow(r);
       nextRow = r + 1;
     }
-    for (const key of rowCache.keys()) {
-      if (key < k.start) rowCache.delete(key);
-    }
-    // 窗口行引用提前收集（避免内层循环反复查 Map）
-    const rows: Uint8Array[] = [];
-    for (let j = 0; j < k.weights.length; j++) {
-      rows.push(rowCache.get(k.start + j)!);
-    }
+    // 窗口行引用提前收集（模运算每输出行一次，不进像素内层循环）
     const w = k.weights;
+    for (let j = 0; j < w.length; j++) {
+      rows[j] = ring[(k.start + j) % cap];
+    }
     const outRow = y * dw * 4;
     for (let x = 0; x < dw; x++) {
       const p = x * 4;
@@ -193,12 +204,14 @@ export const resizeRgba = (
   }
 
   // 3. 反预乘：RGBa→RGBA（Convert.c rgba2rgbA：alpha 0/255 直通，其余整除 255/a 后钳制）
-  for (let p = 0; p < out.length; p += 4) {
-    const a = out[p + 3];
-    if (a !== 0 && a !== 255) {
-      out[p] = Math.min(255, Math.floor((255 * out[p]) / a));
-      out[p + 1] = Math.min(255, Math.floor((255 * out[p + 1]) / a));
-      out[p + 2] = Math.min(255, Math.floor((255 * out[p + 2]) / a));
+  if (!opaqueHint) {
+    for (let p = 0; p < out.length; p += 4) {
+      const a = out[p + 3];
+      if (a !== 0 && a !== 255) {
+        out[p] = Math.min(255, Math.floor((255 * out[p]) / a));
+        out[p + 1] = Math.min(255, Math.floor((255 * out[p + 1]) / a));
+        out[p + 2] = Math.min(255, Math.floor((255 * out[p + 2]) / a));
+      }
     }
   }
 
@@ -232,15 +245,18 @@ export const resizeGray = (
   const kx = sameW ? null : buildKernels(sw, dw);
   const ky = buildKernels(sh, dh);
 
-  // 滑动窗口行缓存：只保留当前纵向核窗口内已滤波的源行
-  const rowCache = new Map<number, Uint8Array>();
+  // 环形行缓存（同 resizeRgba）：容量 = 纵向核最大窗口长度
+  let cap = 1;
+  for (let y = 0; y < dh; y++) {
+    if (ky[y].weights.length > cap) cap = ky[y].weights.length;
+  }
+  const ring: Uint8Array[] = new Array(cap);
+  const rows: Uint8Array[] = new Array(cap);
   let nextRow = 0;
   const filterRow = (sy: number): Uint8Array => {
+    // 等宽直通行：零拷贝视图（源缓冲在两遍间只读）
+    if (sameW) return src.subarray(sy * sw, (sy + 1) * sw);
     const r = new Uint8Array(dw);
-    if (sameW) {
-      r.set(src.subarray(sy * sw, (sy + 1) * sw));
-      return r;
-    }
     const base = sy * sw;
     for (let x = 0; x < dw; x++) {
       const k = kx![x];
@@ -260,17 +276,13 @@ export const resizeGray = (
     const k = ky[y];
     const end = k.start + k.weights.length;
     for (let r = nextRow; r < end; r++) {
-      rowCache.set(r, filterRow(r));
+      ring[r % cap] = filterRow(r);
       nextRow = r + 1;
     }
-    for (const key of rowCache.keys()) {
-      if (key < k.start) rowCache.delete(key);
-    }
-    const rows: Uint8Array[] = [];
-    for (let j = 0; j < k.weights.length; j++) {
-      rows.push(rowCache.get(k.start + j)!);
-    }
     const w = k.weights;
+    for (let j = 0; j < w.length; j++) {
+      rows[j] = ring[(k.start + j) % cap];
+    }
     const outRow = y * dw;
     for (let x = 0; x < dw; x++) {
       let s0 = PRECISION_HALF;
