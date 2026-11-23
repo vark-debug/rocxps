@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "npm run native:build:mac && cross-env MODE=dev vite build --watch",
     "build": "npm run native:build:mac && cross-env MODE=build vite build",
-    "native:build:mac": "cmake -B native/SiliconedBridge/build -S native/SiliconedBridge -DCMAKE_BUILD_TYPE=Release && cmake --build native/SiliconedBridge/build --config Release",
+    "native:build:mac": "node scripts/native-build.mjs",
     "test": "node scripts/run-tests.mjs",
     "ccx": "npm run native:build:mac && cross-env MODE=package vite build",
     "zip": "npm run native:build:mac && cross-env MODE=zip vite build",
