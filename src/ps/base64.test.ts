@@ -34,9 +34,9 @@ describe("uint8ToBase64", () => {
     }
   });
 
-  it("跨 8192 分片边界的大缓冲与 Buffer 一致（尾部长度 0/1/2 各验一次）", () => {
+  it("跨 32768 分片边界的大缓冲与 Buffer 一致（尾部长度 0/1/2 各验一次）", () => {
     for (const extra of [0, 1, 2]) {
-      const len = 0x2000 * 2 + extra;
+      const len = (0x8000 * 3) / 4 + extra;
       const bytes = randomBytes(len, len + 7);
       assert.equal(uint8ToBase64(bytes), expectBase64(bytes), `len=${len}`);
     }
