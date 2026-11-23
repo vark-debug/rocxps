@@ -87,6 +87,12 @@ textarea {
   flex: none;
 }
 
+.redraw-panel__header-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
 // ---- 编辑区：展开态固定 248px（模板/操作按钮恢复 32px 标准高度后需相应加高），
 // 队列折叠时 flex:1 吃掉剩余高度 ----
 
@@ -102,6 +108,27 @@ textarea {
 
 .redraw-panel__editor--grow {
   flex: 1;
+  height: auto;
+}
+
+// 编辑区头部开关行（常驻）：折叠后编辑区仅剩此行，队列区（暂停/清空按钮）不受影响
+.redraw-panel__editor-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 24px;
+  flex: none;
+  margin-bottom: 4px;
+}
+
+.redraw-panel__editor-title {
+  font-size: 11px;
+  color: #d0d0d0;
+}
+
+// 折叠态：高度自适应（仅剩头部行）；置于 --grow 之后，折叠时覆盖其 flex:1
+.redraw-panel__editor--collapsed {
+  flex: none;
   height: auto;
 }
 
@@ -571,6 +598,40 @@ textarea {
   margin-left: 8px;
   // 从条目右缘往左退 10px：给右上角的删除叉让出视觉空间（避免紧贴叉）
   margin-right: 10px;
+}
+
+// ---- 选区浮层实验面板（事件驱动 + 可见时保底轮询）----
+
+.selection-panel {
+  padding: 12px;
+}
+
+.selection-panel__title {
+  display: block;
+  text-align: left;
+  font-weight: 600;
+  margin: 0 0 6px;
+}
+
+.selection-panel__hint {
+  font-size: 11px;
+  color: var(--uxp-host-text-color-secondary);
+  margin: 0 0 8px;
+}
+
+.selection-panel__row {
+  display: flex;
+  gap: 8px;
+}
+
+.selection-panel__note {
+  font-size: 10px;
+  color: var(--uxp-host-text-color-secondary);
+  margin: 8px 0 0;
+}
+
+.selection-panel__note--error {
+  color: #f26d6d;
 }
 
 // ---- 设置二级面板 ----

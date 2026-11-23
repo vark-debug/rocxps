@@ -98,6 +98,37 @@ const manifest: UXP_Manifest = {
       ],
     },
 
+    // 选区浮层（实验）：独立面板，事件驱动 + 可见时保底轮询
+    {
+      type: "panel",
+      id: `${id}.selection`,
+      label: {
+        default: `${name} Selection`,
+      },
+      minimumSize: { width: 290, height: 160 },
+      maximumSize: { width: 2000, height: 2000 },
+      preferredDockedSize: { width: 330, height: 200 },
+      preferredFloatingSize: { width: 330, height: 200 },
+      icons: [
+        {
+          width: 23,
+          height: 23,
+          path: "icons/dark-panel.png",
+          scale: [1, 2],
+          theme: ["darkest", "dark", "medium"],
+          species: ["chrome"],
+        },
+        {
+          width: 23,
+          height: 23,
+          path: "icons/light-panel.png",
+          scale: [1, 2],
+          theme: ["lightest", "light"],
+          species: ["chrome"],
+        },
+      ],
+    },
+
     // * Example of a UXP Command
     // {
     //   type: "command",

@@ -82,6 +82,8 @@ export interface RedrawSettings {
   queueDiskLimitMB: number;
   /** 主面板任务队列是否折叠（折叠后编辑区吃掉剩余高度）。 */
   queueCollapsed: boolean;
+  /** 主面板提示词编辑区是否折叠（折叠后仅剩头部开关行，队列区不受影响）。 */
+  promptCollapsed: boolean;
   /** 主面板两行三列的提示词模板按钮（固定 6 个槽位）。 */
   promptTemplates: PromptTemplate[];
 
@@ -140,6 +142,7 @@ export const DEFAULT_SETTINGS: RedrawSettings = {
   debugDiag: false,
   queueDiskLimitMB: 2048,
   queueCollapsed: false,
+  promptCollapsed: false,
   promptTemplates: EMPTY_TEMPLATES.map((t) => ({ ...t })),
   rhBaseUrl: RH_DEFAULT_BASE_URL,
   rhEndpoint: RH_DEFAULT_ENDPOINT,

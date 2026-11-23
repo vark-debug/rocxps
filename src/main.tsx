@@ -2,6 +2,7 @@ import React from "react";
 
 import { uxp } from "./globals";
 import { RedrawPanel } from "./components/RedrawPanel";
+import { SelectionPanel } from "./components/SelectionPanel";
 import { SettingsPanel } from "./components/SettingsPanel";
 
 const id = uxp.entrypoints._pluginInfo.id;
@@ -25,6 +26,10 @@ export const App = () => {
       {/* 设置二级面板（manifest 已注册 `${id}.settings`） */}
       <uxp-panel panelid={`${id}.settings`}>
         <SettingsPanel />
+      </uxp-panel>
+      {/* 选区浮层实验面板（manifest 已注册 `${id}.selection`） */}
+      <uxp-panel panelid={`${id}.selection`}>
+        <SelectionPanel />
       </uxp-panel>
     </>
   );

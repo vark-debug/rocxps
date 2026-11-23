@@ -48,6 +48,22 @@ CommandResult RunCommandForPlatform(const std::string& exe,
 addon_value RunCommandImpl(addon_env env, addon_callback_info info);
 
 /**
+ * 原生浮窗任务栏(SiliconedBridgeToolbar.mm):
+ *   showToolbar({width?, height?})  — 无边框 NSPanel,创建即在目标位置(无闪烁),
+ *                                     不抢 PS 焦点;重复调用重新显示并重定位。
+ *   hideToolbar()                   — 收起浮窗(复用不销毁,可再 show)。
+ *   setToolbarState(state)          — 推送 UI 状态:{mode,status?,statusError?,
+ *                                     busy?,placeholder?,value?},字段缺省=不变。
+ *   waitToolbarEvent()              — Promise<{raw: string} | null>,UI 事件 JSON
+ *                                     (click{id} / input{value} / error{message})。
+ * 实验性:hybrid 官方只承诺计算/逻辑,画 UI 属未支持路径,PS 大版本更新需复测。
+ */
+addon_value ShowToolbarImpl(addon_env env, addon_callback_info info);
+addon_value HideToolbarImpl(addon_env env, addon_callback_info info);
+addon_value SetToolbarStateImpl(addon_env env, addon_callback_info info);
+addon_value WaitToolbarEventImpl(addon_env env, addon_callback_info info);
+
+/**
  * addon init 入口 — 把 runCommand 挂到 exports 后返回 exports
  * 签名必须为 (addon_env, addon_value, const addon_apis&),由 UXP_ADDON_INIT 宏展开调用
  */

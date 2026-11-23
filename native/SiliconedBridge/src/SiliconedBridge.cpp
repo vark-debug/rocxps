@@ -192,18 +192,30 @@ addon_value RunCommandImpl(addon_env env, addon_callback_info info) {
 }
 
 addon_value SiliconedBridgeInit(addon_env env, addon_value exports, const addon_apis& addonAPIs) {
-    addon_value cmdFn = nullptr;
-    if (addonAPIs.uxp_addon_create_function(env, nullptr, 0, RunCommandImpl, nullptr, &cmdFn) !=
-        addon_ok) {
-        addonAPIs.uxp_addon_throw_error(env, nullptr, "SiliconedBridge: failed to wrap runCommand");
-        return exports;
-    }
-    if (addonAPIs.uxp_addon_set_named_property(env, exports, "runCommand", cmdFn) != addon_ok) {
-        addonAPIs.uxp_addon_throw_error(env, nullptr, "SiliconedBridge: failed to populate exports");
-        return exports;
+    struct ExportSpec {
+        const char* name;
+        addon_value (*impl)(addon_env, addon_callback_info);
+    };
+    const ExportSpec specs[] = {
+        {"runCommand", RunCommandImpl},
+        {"showToolbar", ShowToolbarImpl},
+        {"hideToolbar", HideToolbarImpl},
+        {"setToolbarState", SetToolbarStateImpl},
+        {"waitToolbarEvent", WaitToolbarEventImpl},
+    };
+    for (const auto& spec : specs) {
+        addon_value fn = nullptr;
+        if (addonAPIs.uxp_addon_create_function(env, nullptr, 0, spec.impl, nullptr, &fn) !=
+                addon_ok ||
+            fn == nullptr ||
+            addonAPIs.uxp_addon_set_named_property(env, exports, spec.name, fn) != addon_ok) {
+            addonAPIs.uxp_addon_throw_error(env, nullptr, "SiliconedBridge: failed to register export");
+            return exports;
+        }
     }
 
-    std::fprintf(stderr, "[SiliconedBridge] init ok, runCommand registered\n");
+    std::fprintf(stderr, "[SiliconedBridge] init ok, exports: runCommand/showToolbar/"
+                         "hideToolbar/setToolbarState/waitToolbarEvent\n");
     return exports;
 }
 

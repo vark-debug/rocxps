@@ -27,7 +27,11 @@ set(COMMON_SOURCES
 )
 
 if(APPLE)
-    list(APPEND COMMON_SOURCES src/SiliconedBridgeCommand.mm)
+    list(APPEND COMMON_SOURCES src/SiliconedBridgeCommand.mm src/SiliconedBridgeToolbar.mm)
+    # Toolbar 使用 ARC：MRC 下自动释放的颜色对象挂在 ivar 上会变僵尸对象
+    # （实测 setTextColor: 崩溃打崩 PS）；视图/颜色生命周期交给编译器。
+    set_source_files_properties(src/SiliconedBridgeToolbar.mm
+        PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
 else()
     message(FATAL_ERROR "SiliconedBridge: only macOS is supported (host is Photoshop on macOS)")
 endif()
@@ -42,6 +46,8 @@ target_link_libraries(SiliconedBridge PRIVATE Threads::Threads)
 if(APPLE)
     target_link_libraries(SiliconedBridge PRIVATE
         "-framework Foundation"
+        "-framework AppKit"
+        "-framework QuartzCore"  # toolbar 横幅动画（CAMediaTimingFunction）
     )
     if(CMAKE_SYSTEM_PROCESSOR MATCHES "arm64")
         set(UXP_PLATFORM_DIR "mac/arm64")

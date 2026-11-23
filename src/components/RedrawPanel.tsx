@@ -33,14 +33,8 @@ import type {
 } from "../settings/types";
 import { requestSizeFor } from "../task/pipeline";
 import type { QueueJob } from "../task/queue";
-import {
-  enqueueCapture,
-  enqueueExpandCapture,
-  initQueueRuntime,
-  queueRunner,
-  queueStore,
-  refreshQueueRuntime,
-} from "../task/queueRunner";
+import { enqueueCapture, enqueueExpandCapture, initQueueRuntime, queueRunner, queueStore, refreshQueueRuntime } from "../task/queueRunner";
+import { generateFromSelection } from "../task/generateFlow";
 import { uxp } from "../globals";
 import { openUXPPanel } from "../api/uxp";
 import { promptBlocksSubmit } from "../task/promptPolicy";
@@ -262,6 +256,8 @@ export const RedrawPanel = () => {
   const [upscaleError, setUpscaleError] = useState("");
   /** 任务队列折叠状态（持久化到设置；折叠后编辑区吃掉剩余高度）。 */
   const [queueCollapsed, setQueueCollapsed] = useState(false);
+  /** 提示词编辑区折叠（持久化到设置；队列区的暂停/清空按钮不受影响）。 */
+  const [promptCollapsed, setPromptCollapsed] = useState(false);
   /** 抓取详情弹层开关（缩略图行的「详情 ›」）。 */
   const [showCaptureDetail, setShowCaptureDetail] = useState(false);
   const thumbCache = useRef<Record<string, string>>({});
@@ -318,6 +314,7 @@ export const RedrawPanel = () => {
           setSiliconMode(s.siliconedMode);
           setUpscaleLongSide(String(s.upscaleLongSide));
           setQueueCollapsed(s.queueCollapsed);
+          setPromptCollapsed(s.promptCollapsed);
           setWorkflow(s.panelWorkflow);
           return refreshQueueRuntime();
         })
@@ -386,6 +383,20 @@ export const RedrawPanel = () => {
       const settings = await loadSettings();
       if (settings.queueCollapsed !== next) {
         await saveSettings({ ...settings, queueCollapsed: next });
+      }
+    } catch {
+      // 设置保存失败不影响本次折叠
+    }
+  };
+
+  /** 折叠 / 展开提示词编辑区并持久化（只收编辑区，队列区的暂停/清空按钮保持可见）。 */
+  const togglePrompt = async () => {
+    const next = !promptCollapsed;
+    setPromptCollapsed(next);
+    try {
+      const settings = await loadSettings();
+      if (settings.promptCollapsed !== next) {
+        await saveSettings({ ...settings, promptCollapsed: next });
       }
     } catch {
       // 设置保存失败不影响本次折叠
@@ -486,7 +497,8 @@ export const RedrawPanel = () => {
     }
   };
 
-  /** 入队：抓取结果立刻落盘，队列项只保留路径；并发与单飞由调度器负责。 */
+  /** 入队：抓取结果立刻落盘，队列项只保留路径；并发与单飞由调度器负责。
+   *  selection 工作流的核心逻辑提炼到 generateFlow（浮窗工具栏共用同一实现）。 */
   const generate = async (
     promptOverride?: string,
     settingsOverride?: Partial<RedrawSettings>,
@@ -494,16 +506,16 @@ export const RedrawPanel = () => {
     setGrabError("");
     setLimitNotice("");
     const text = (promptOverride ?? prompt).trim();
-    let settings: RedrawSettings;
-    try {
-      settings = await loadSettings();
-    } catch (err) {
-      setGrabError(`读取设置失败：${err instanceof Error ? err.message : String(err)}`);
-      return;
-    }
 
     // ---- 阔图工作流：仅 Siliconed，无选区 / 蒙版 / 模板 ----
     if (workflow === "expand") {
+      let settings: RedrawSettings;
+      try {
+        settings = await loadSettings();
+      } catch (err) {
+        setGrabError(`读取设置失败：${err instanceof Error ? err.message : String(err)}`);
+        return;
+      }
       const provider = getCatalogModel(settings.modelId).provider;
       setSiliconedSel(provider === "siliconed");
       if (provider !== "siliconed") {
@@ -544,57 +556,28 @@ export const RedrawPanel = () => {
       return;
     }
 
-    const effective = applyGenerationOverride(settings, settingsOverride);
-    const provider = getCatalogModel(effective.modelId).provider;
-    const siliconed = provider === "siliconed";
-    // 以本次任务实际生效的 provider 判定（设置面板保存不会通知主面板，缓存值可能过期）
-    setSiliconedSel(siliconed);
-    setSiliconMode(effective.siliconedMode);
-    // Siliconed 允许留空（运行时会注入默认移除文案）；其他平台仍要求填写
-    if (promptBlocksSubmit(provider, text)) {
-      setLimitNotice("请先填写提示词");
-      return;
-    }
-    // 手动指定重绘时提示词必填（auto 下留空会判定为移除，不受影响）
-    if (siliconed && effective.siliconedMode === "redraw" && !text) {
-      setLimitNotice("重绘模式需要填写提示词");
-      return;
-    }
-    // 抓取与当前 provider 的外扩参数不一致时重新抓取，避免 1.4× 只对 Siliconed 生效的约束被绕过
-    const wantedExpand = siliconed ? SILICONED_SELECTION_EXPAND : 1;
-    let current = capture && (capture.selectionExpand ?? 1) === wantedExpand ? capture : null;
-    if (!current) {
-      setCaptureBusy(true);
-      try {
-        current = await captureSelection({
-          sizeMode: effective.sizeMode,
-          fixedPresetId: effective.fixedPresetId,
-          expandFactor: siliconed ? SILICONED_SELECTION_EXPAND : undefined,
-          maskPatchFloor: siliconed,
-        });
-      } catch (err) {
-        setCaptureBusy(false);
-        setGrabError(err instanceof Error ? err.message : String(err));
-        return;
-      }
-      setCaptureBusy(false);
-    }
-    try {
-      await enqueueCapture({
-        prompt: text,
-        capture: current,
-        settings: effective,
-        ...(settingsOverride ? { settingsOverride } : {}),
-      });
+    // selection 工作流：核心逻辑与浮窗工具栏共用（generateFlow.ts）
+    const outcome = await generateFromSelection({
+      prompt: text,
+      ...(settingsOverride ? { settingsOverride } : {}),
+      reuseCapture: capture ?? undefined,
+      onCaptureBusy: setCaptureBusy,
+      onNotice: setLimitNotice,
+    });
+    if (outcome.ok) {
+      setSiliconedSel(outcome.provider === "siliconed");
+      setSiliconMode(outcome.siliconedMode);
       // 释放面板内存中的大图；队列已持有落盘路径
       setCapture(null);
       setRequest(null);
       setShowCaptureDetail(false);
-      setLimitNotice(
-        queueStore.isPaused() ? "已加入队列（队列已暂停）" : "已加入队列",
-      );
-    } catch (err) {
-      setGrabError(err instanceof Error ? err.message : String(err));
+    } else {
+      if (outcome.siliconedMode) {
+        setSiliconedSel(outcome.provider === "siliconed");
+        setSiliconMode(outcome.siliconedMode);
+      }
+      if (outcome.kind === "notice") setLimitNotice(outcome.message);
+      else setGrabError(outcome.message);
     }
   };
 
@@ -648,14 +631,24 @@ export const RedrawPanel = () => {
     <section className="redraw-panel">
       <header className="redraw-panel__header">
         <span className="redraw-panel__title">AI 局部重绘</span>
-        <sp-button
-          className="redraw-panel__settings-btn"
-          variant="secondary"
-          quiet
-          onclick={() => openUXPPanel(`${pluginId}.settings`)}
-        >
-          设置
-        </sp-button>
+        <div className="redraw-panel__header-actions">
+          <sp-button
+            className="redraw-panel__settings-btn"
+            variant="secondary"
+            quiet
+            onclick={() => openUXPPanel(`${pluginId}.selection`)}
+          >
+            浮层
+          </sp-button>
+          <sp-button
+            className="redraw-panel__settings-btn"
+            variant="secondary"
+            quiet
+            onclick={() => openUXPPanel(`${pluginId}.settings`)}
+          >
+            设置
+          </sp-button>
+        </div>
       </header>
 
       {busy && (
@@ -668,8 +661,20 @@ export const RedrawPanel = () => {
 
       {/* 编辑区：默认固定 212px；队列折叠时 flex:1 吃掉剩余高度 */}
       <div
-        className={`redraw-panel__editor${queueCollapsed ? " redraw-panel__editor--grow" : ""}`}
+        className={`redraw-panel__editor${queueCollapsed ? " redraw-panel__editor--grow" : ""}${promptCollapsed ? " redraw-panel__editor--collapsed" : ""}`}
       >
+      {/* 头部开关行常驻：折叠后仍可展开；队列区的暂停/清空按钮不受影响 */}
+      <div className="redraw-panel__editor-head">
+        <span className="redraw-panel__editor-title">提示词</span>
+        <span
+          className="redraw-panel__queue-toggle"
+          onClick={() => void togglePrompt()}
+        >
+          {promptCollapsed ? "展开 ⌄" : "收起 ⌃"}
+        </span>
+      </div>
+      {!promptCollapsed && (
+      <>
       <div className="redraw-panel__field">
         <span className="redraw-panel__field-control">
           <sp-textarea
@@ -684,9 +689,7 @@ export const RedrawPanel = () => {
             }
             oninput={(e) => setPrompt(e.target.value)}
             onchange={(e) => setPrompt(e.target.value)}
-          >
-            <sp-label slot="label">提示词</sp-label>
-          </sp-textarea>
+          />
         </span>
       </div>
 
@@ -860,6 +863,8 @@ export const RedrawPanel = () => {
           </span>
         </div>
       )}
+      </>
+      )}
       </div>
 
       <div
@@ -1010,33 +1015,6 @@ export const RedrawPanel = () => {
                     <p className="redraw-panel__item-error">{e.error}</p>
                   )}
                 </span>
-                {e.status === "queued" && (
-                  <sp-button
-                    className="redraw-panel__item-action"
-                    quiet
-                    onclick={() => void cancelJob(e.id)}
-                  >
-                    取消
-                  </sp-button>
-                )}
-                {e.status === "running" && (
-                  <sp-button
-                    className="redraw-panel__item-action"
-                    quiet
-                    onclick={() => void cancelJob(e.id)}
-                  >
-                    取消
-                  </sp-button>
-                )}
-                {e.status === "pendingPlace" && (
-                  <sp-button
-                    className="redraw-panel__item-action"
-                    quiet
-                    onclick={() => void cancelJob(e.id)}
-                  >
-                    取消
-                  </sp-button>
-                )}
                 {e.status === "pendingPlace" &&
                   e.resultPath &&
                   e.stage !== "placing" && (

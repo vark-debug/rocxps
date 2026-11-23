@@ -1,4 +1,5 @@
 import type { ProviderId } from "../providers/types";
+import type { SiliconModeChoice } from "../providers/siliconedPlan";
 
 /**
  * 主面板工作流（与 src/ps/expandPlan.ts 的 PanelWorkflow 同义）：
@@ -23,3 +24,22 @@ export const promptBlocksSubmit = (
   workflow: PromptWorkflow = "selection",
 ): boolean =>
   workflow === "expand" ? false : providerId !== "siliconed" && !prompt.trim();
+
+/**
+ * 从选区入队前的全部拦截分支（generateFlow 与浮窗工具栏共用，纯函数可单测）。
+ * 与 promptBlocksSubmit 同为「提交前判定口径」，故收敛在本模块。
+ */
+export const validateGenerateFlow = (
+  provider: ProviderId,
+  prompt: string,
+  siliconedMode: SiliconModeChoice,
+): { ok: true } | { ok: false; message: string } => {
+  if (promptBlocksSubmit(provider, prompt)) {
+    return { ok: false, message: "请先填写提示词" };
+  }
+  // 手动指定重绘时提示词必填（auto 下留空会判定为移除，不受影响）
+  if (provider === "siliconed" && siliconedMode === "redraw" && !prompt.trim()) {
+    return { ok: false, message: "重绘模式需要填写提示词" };
+  }
+  return { ok: true };
+};

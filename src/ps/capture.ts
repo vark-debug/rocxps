@@ -207,6 +207,9 @@ const selectRectDesc = (b: Rect): ActionDescriptor => ({
     bottom: { _unit: "pixelsUnit", _value: b.bottom },
     right: { _unit: "pixelsUnit", _value: b.right },
   },
+  // 命令启用性检查在 PS 主窗口失焦时可能拒绝 set（如浮窗获得焦点），
+  // 强制执行避免「命令“设置”当前不可用」原生错误框。
+  _options: { dialogOptions: "dontDisplay", commandEnablement: "always" },
 });
 
 /**
