@@ -41,7 +41,13 @@ export interface ToolbarUiState {
 
 interface ToolbarAddon {
   /** 显示浮窗：首次调用创建（PS 主线程），重复调用重新显示并重定位 */
-  showToolbar(options?: { width?: number; height?: number }): Promise<void>;
+  showToolbar(options?: {
+    width?: number;
+    height?: number;
+    /** 锚点（选区下方）：全局屏幕坐标（top-left 原点，点），缺省走 native 固定位置 */
+    x?: number;
+    y?: number;
+  }): Promise<void>;
   /** 收起浮窗（复用不销毁，可再次 show） */
   hideToolbar(): Promise<void>;
   /** 推送 UI 状态（native 侧 UI = f(state)） */
@@ -77,8 +83,18 @@ const loadAddon = (): Promise<ToolbarAddon> => {
   return addonPromise;
 };
 
-/** 显示原生浮窗。默认尺寸 430×82；位置由 native 侧决定（右缘贴屏幕中线、底缘 1/4）。 */
-export const showToolbar = async (options?: { width?: number; height?: number }): Promise<void> => {
+/**
+ * 显示原生浮窗。默认尺寸 430×82。
+ * 位置：传 x/y（选区锚点，全局屏幕坐标 top-left 原点）→ native 按锚点定位；
+ * 缺省 → native 固定位置（右缘贴屏幕中线、底缘 1/4）。
+ */
+export const showToolbar = async (options?: {
+  width?: number;
+  height?: number;
+  /** 全局屏幕坐标（top-left 原点，点）；缺省走 native 固定位置 */
+  x?: number;
+  y?: number;
+}): Promise<void> => {
   const addon = await loadAddon();
   await addon.showToolbar(options);
 };

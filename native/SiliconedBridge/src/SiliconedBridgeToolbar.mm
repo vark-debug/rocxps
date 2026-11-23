@@ -3,8 +3,10 @@
  *
  * 目标（解决 UXP <dialog> 的三个硬伤）：
  *   1. 无系统标题栏      —— NSPanel + Borderless 样式，内容完全自绘；
- *   2. 出现即精确定位    —— 创建时直接 setFrame 到目标位置（右缘贴屏幕中线、
- *                            底缘在从下往上 1/4 处），不经过「先居中再挪」的闪烁；
+ *   2. 出现即精确定位    —— showToolbar 可传全局屏幕坐标锚点（top-left 原点，
+ *                            点）：JS 按选区算好目标位置，native 转 Cocoa
+ *                            bottom-left 坐标后创建即 setFrame，不经过
+ *                            「先居中再挪」的闪烁；屏幕兜底钳制进 visibleFrame；
  *   3. 不抢 PS 焦点      —— NSWindowStyleMaskNonactivatingPanel。
  *
  * 架构（JS 是唯一状态源，native 无状态逻辑，UI = f(state)）：
@@ -30,6 +32,8 @@
 #import <AppKit/AppKit.h>
 #import <QuartzCore/QuartzCore.h>
 
+#include <algorithm>
+#include <cmath>
 #include <condition_variable>
 #include <deque>
 #include <mutex>
@@ -686,22 +690,55 @@ void InstallHostVisibilityObservers() {
 
 // ---------------------------------------------------------------- 窗口管理（主线程）
 
-/** 在目标位置创建/显示浮窗（必须在主线程调用；@try 兜底防异常打崩宿主） */
-void CreateAndShowPanelOnUiThread(double width, double height) {
+/** 在目标位置创建/显示浮窗（必须在主线程调用；@try 兜底防异常打崩宿主）。
+ *  hasAnchor：JS 传入选区锚点（全局屏幕坐标，top-left 原点，点）——选区
+ *  锚定定位；否则退回固定位置（右缘贴屏幕中线、底缘从下往上 1/4 屏）。 */
+void CreateAndShowPanelOnUiThread(double width, double height,
+                                  bool hasAnchor, double anchorX, double anchorY) {
     @try {
         InstallHostVisibilityObservers();
         std::fprintf(stderr, "[SiliconedBridge] toolbar: create panel %.0fx%.0f (main=%d)\n",
                      width, height, [NSThread isMainThread] ? 1 : 0);
-        NSScreen* screen = NSScreen.screens.firstObject;
-        NSRect screenFrame = screen.frame;
-        // 目标（AX 语义，top-left 原点）：x = midX - w，yTop = 0.75*screenH - h。
-        // 转 Cocoa（bottom-left 原点）：origin.y = screenH - yTop - h = 0.25*screenH。
-        double x = screenFrame.origin.x + screenFrame.size.width / 2.0 - width;
-        double y = screenFrame.origin.y + screenFrame.size.height * 0.25;
+        NSRect targetRect;
+        if (hasAnchor) {
+            // JS 传来 UXP「全局显示空间」坐标（top-left 原点、macOS 为点；与
+            // viewInfo.globalBounds 同空间）。转 Cocoa（bottom-left 原点）：
+            // x 不变；y 关于主屏高度翻转（主屏 frame.origin.y == 0）。
+            double primaryH = NSScreen.screens.firstObject.frame.size.height;
+            double cocoaTopLeftY = primaryH - anchorY;  // 窗口顶缘
+            targetRect = NSMakeRect(anchorX, cocoaTopLeftY - height, width, height);
+            std::fprintf(stderr,
+                         "[SiliconedBridge] toolbar: anchor global(%.0f,%.0f) -> cocoa origin(%.0f,%.0f)\n",
+                         anchorX, anchorY, targetRect.origin.x, targetRect.origin.y);
+            // 保险钳制：无论 JS 传什么，浮窗完整落在所在屏的可见区域内
+            // （JS 侧已按可见画布钳制，这里兜底防异常输入把浮窗推出屏幕）
+            NSScreen* targetScreen = NSScreen.mainScreen;
+            for (NSScreen* s in NSScreen.screens) {
+                if (NSIntersectsRect(s.frame, targetRect)) {
+                    targetScreen = s;
+                    break;
+                }
+            }
+            NSRect vf = targetScreen.visibleFrame;
+            double minX = vf.origin.x;
+            double minY = vf.origin.y;
+            double maxX = vf.origin.x + vf.size.width - width;
+            double maxY = vf.origin.y + vf.size.height - height;
+            targetRect.origin.x = std::min(std::max(targetRect.origin.x, minX), std::max(minX, maxX));
+            targetRect.origin.y = std::min(std::max(targetRect.origin.y, minY), std::max(minY, maxY));
+        } else {
+            NSScreen* screen = NSScreen.screens.firstObject;
+            NSRect screenFrame = screen.frame;
+            // 目标（AX 语义，top-left 原点）：x = midX - w，yTop = 0.75*screenH - h。
+            // 转 Cocoa（bottom-left 原点）：origin.y = screenH - yTop - h = 0.25*screenH。
+            double x = screenFrame.origin.x + screenFrame.size.width / 2.0 - width;
+            double y = screenFrame.origin.y + screenFrame.size.height * 0.25;
+            targetRect = NSMakeRect(x, y, width, height);
+        }
 
         if (gPanel == nil) {
             ToolbarPanel* panel = [[ToolbarPanel alloc]
-                initWithContentRect:NSMakeRect(x, y, width, height)
+                initWithContentRect:targetRect
                             styleMask:NSWindowStyleMaskBorderless | NSWindowStyleMaskNonactivatingPanel
                               backing:NSBackingStoreBuffered
                                 defer:NO];
@@ -717,11 +754,20 @@ void CreateAndShowPanelOnUiThread(double width, double height) {
             gPanel = panel;
             std::fprintf(stderr, "[SiliconedBridge] toolbar: panel created\n");
         } else {
-            // 复用面板但尺寸变化（JS 布局升级 / dylib 常驻跨插件重载）：
-            // 调整窗口大小并重建内容视图；位置保持左上角不动（不破坏用户
-            // 拖动的位置）
             NSRect oldFrame = [gPanel frame];
-            if (oldFrame.size.width != width || oldFrame.size.height != height) {
+            bool sizeChanged = oldFrame.size.width != width || oldFrame.size.height != height;
+            if (hasAnchor) {
+                // 每次浮现重新锚定选区（浮窗随选区移动；sizeChanged 时内容视图
+                // 一并重建，setFrame 同时更新尺寸）
+                if (sizeChanged) {
+                    gPanel.contentView =
+                        [[ToolbarContentView alloc] initWithFrame:NSMakeRect(0, 0, width, height)];
+                }
+                [gPanel setFrame:targetRect display:YES];
+            } else if (sizeChanged) {
+                // 复用面板但尺寸变化（JS 布局升级 / dylib 常驻跨插件重载）：
+                // 调整窗口大小并重建内容视图；位置保持左上角不动（不破坏用户
+                // 拖动的位置）
                 double topLeftY = oldFrame.origin.y + oldFrame.size.height;
                 [gPanel setFrame:NSMakeRect(oldFrame.origin.x, topLeftY - height, width, height)
                          display:YES];
@@ -841,6 +887,9 @@ addon_value ShowToolbarImpl(addon_env env, addon_callback_info info) {
 
         double width = kWidth;
         double height = kHeight;
+        bool hasAnchor = false;
+        double anchorX = 0;
+        double anchorY = 0;
         if (argc >= 1 && arg != nullptr) {
             addon_value v = nullptr;
             if (UxpAddonApis.uxp_addon_get_named_property(env, arg, "width", &v) == addon_ok &&
@@ -851,12 +900,29 @@ addon_value ShowToolbarImpl(addon_env env, addon_callback_info info) {
                 v != nullptr) {
                 UxpAddonApis.uxp_addon_get_value_double(env, v, &height);
             }
+            // 选区锚点（全局屏幕坐标，top-left 原点）：x/y 同时有效才启用
+            addon_value vx = nullptr;
+            addon_value vy = nullptr;
+            if (UxpAddonApis.uxp_addon_get_named_property(env, arg, "x", &vx) == addon_ok &&
+                vx != nullptr &&
+                UxpAddonApis.uxp_addon_get_named_property(env, arg, "y", &vy) == addon_ok &&
+                vy != nullptr) {
+                double x = 0;
+                double y = 0;
+                if (UxpAddonApis.uxp_addon_get_value_double(env, vx, &x) == addon_ok &&
+                    UxpAddonApis.uxp_addon_get_value_double(env, vy, &y) == addon_ok &&
+                    std::isfinite(x) && std::isfinite(y)) {
+                    hasAnchor = true;
+                    anchorX = x;
+                    anchorY = y;
+                }
+            }
         }
 
         // 窗口操作全部投递到 PS 主线程（见文件头线程模型）；立即返回，
         // 创建失败通过 error 事件回传（JS 侧 waitToolbarEvent 可见）。
         DispatchToMainThread(^{
-            CreateAndShowPanelOnUiThread(width, height);
+            CreateAndShowPanelOnUiThread(width, height, hasAnchor, anchorX, anchorY);
         });
 
         addon_value undefinedVal = nullptr;

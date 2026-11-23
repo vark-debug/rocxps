@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { photoshop } from "../globals";
-import { readSelection } from "../ps/selection";
+import { readSelection, type SelectionInfo } from "../ps/selection";
+import { readCanvasView, placeToolbar } from "../ps/canvasView";
 import { generateFromSelection } from "../task/generateFlow";
 import {
   hideToolbar,
@@ -24,8 +25,9 @@ import {
  *
  * 浮窗架构（.trae/documents/native-toolbar-plan.md）：
  * - 浮窗本体是 SiliconedBridge.uxpaddon（hybrid C++）创建的无边框 NSPanel：
- *   无系统标题栏、出现即定位到目标位置（右缘贴屏幕中线、底缘在从下往上
- *   1/4 处，无首帧闪烁）、NonactivatingPanel 不抢 PS 焦点；
+ *   无系统标题栏、出现即定位到目标位置（选区锚点：正下方 16px、随选区移动、
+ *   钳制进可见画布，规则见 canvasViewMath；视口读取失败退回 native 固定
+ *   位置）、NonactivatingPanel 不抢 PS 焦点；
  * - JS 是唯一状态源：显隐/两态/操作反馈经 setToolbarState 推送，native 侧
  *   UI = f(state)；点击/输入经 waitToolbarEvent 回传（Promise 循环）；
  * - 实验性：hybrid 画 UI 属官方未支持路径，PS 大版本更新需复测（POC 教训：
@@ -90,13 +92,14 @@ export const SelectionPanel = () => {
 
   const checkSelection = async () => {
     let text = "";
+    let selInfo: SelectionInfo | null = null;
     try {
-      const sel = await readSelection();
-      if (sel) {
-        const w = Math.round(sel.bounds.right - sel.bounds.left);
-        const h = Math.round(sel.bounds.bottom - sel.bounds.top);
-        text = `选区 ${w}×${h} @ (${Math.round(sel.bounds.left)}, ${Math.round(
-          sel.bounds.top,
+      selInfo = await readSelection();
+      if (selInfo) {
+        const w = Math.round(selInfo.bounds.right - selInfo.bounds.left);
+        const h = Math.round(selInfo.bounds.bottom - selInfo.bounds.top);
+        text = `选区 ${w}×${h} @ (${Math.round(selInfo.bounds.left)}, ${Math.round(
+          selInfo.bounds.top,
         )})`;
       }
     } catch {
@@ -106,8 +109,23 @@ export const SelectionPanel = () => {
     lastTextRef.current = text;
     setSelText(text);
     if (text) {
+      // 选区锚点定位（三场景规则见 canvasViewMath.placeToolbar）：读取视口
+      // 失败（旋转画布/版本不支持等）时 anchor 为 null → 退回 native 固定定位
+      const view = await readCanvasView();
+      const anchor = selInfo
+        ? placeToolbar({
+            view,
+            selDoc: selInfo.bounds,
+            docWidth: selInfo.canvasWidth,
+            docHeight: selInfo.canvasHeight,
+            toolbarWidth: TOOLBAR_SIZE.width,
+            toolbarHeight: TOOLBAR_SIZE.height,
+          })
+        : null;
       // 浮现：出现即全量复位浮窗状态（连续操作不串状态）；事件循环幂等启动
-      void showToolbar(TOOLBAR_SIZE)
+      void showToolbar(
+        anchor ? { ...TOOLBAR_SIZE, x: anchor.x, y: anchor.y } : TOOLBAR_SIZE,
+      )
         .then(() =>
           setToolbarState({
             mode: "buttons",
