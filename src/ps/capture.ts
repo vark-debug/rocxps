@@ -5,6 +5,11 @@ import {
   padAmountsOf,
   readSelection,
 } from "./selection";
+import {
+  depthBufferOption,
+  parseComponentDepth,
+  scaleSamplesToDepth,
+} from "./bitDepth";
 import { encodePng } from "./pngEncoder";
 import { CAPTURE_ALIGN } from "./align";
 import { resizeGray, resizeRgba } from "./resize";
@@ -652,10 +657,18 @@ const captureRgbaViaTempDoc = async (
       }),
     );
     if (!techLayer) throw new Error("创建技术像素层失败");
+    // 技术像素写回主文档（doc）：缓冲位深必须与文档一致（PSB 16/32 位文档）
+    const depth = parseComponentDepth(doc.bitsPerChannel);
     const putPixel = async (x: number, y: number) => {
       const data = await imaging.createImageDataFromBuffer(
-        new Uint8Array([0, 0, 0, 1]),
-        { width: 1, height: 1, components: 4, colorSpace: "RGB" },
+        scaleSamplesToDepth(new Uint8Array([0, 0, 0, 1]), depth),
+        {
+          width: 1,
+          height: 1,
+          components: 4,
+          colorSpace: "RGB",
+          ...depthBufferOption(depth),
+        },
       );
       try {
         await imaging.putPixels({

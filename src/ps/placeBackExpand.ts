@@ -1,5 +1,6 @@
 import { photoshop } from "../globals";
 import { decodeImageBytes } from "./imageDecode";
+import { parseComponentDepth } from "./bitDepth";
 import { resizeRgba } from "./resize";
 import {
   computeExpandPlaceGeometry,
@@ -218,7 +219,13 @@ export const placeBackExpand = async (
       });
       if (!layer) throw new Error("创建结果图层失败");
       try {
-        await writePixels(doc.id, layer.id, cropped, geometry);
+        await writePixels(
+          doc.id,
+          layer.id,
+          cropped,
+          geometry,
+          parseComponentDepth(doc.bitsPerChannel),
+        );
       } catch (e) {
         deleteLayer(layer);
         throw e;

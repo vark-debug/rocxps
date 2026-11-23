@@ -1,6 +1,12 @@
 import { photoshop, uxp } from "../globals";
 import { decodeImageBytes } from "./imageDecode";
 import { base64ToBytes } from "./pngDecoder";
+import {
+  depthBufferOption,
+  parseComponentDepth,
+  scaleSamplesToDepth,
+  type ComponentDepth,
+} from "./bitDepth";
 import { applyMaskAlpha, resizeRgba } from "./resize";
 import {
   composeCanvasMask,
@@ -135,24 +141,33 @@ const assertNoError = (
   }
 };
 
-/** 写入像素到结果图层（imageData 用完立即释放，避免占用有限槽位）。 */
+/**
+ * 写入像素到结果图层（imageData 用完立即释放，避免占用有限槽位）。
+ * 缓冲按目标文档位深缩放（PSB 16/32 位文档：putPixels 零转换，
+ * 缓冲类型与文档位深不一致会报 depth mismatch）。
+ */
 export const writePixels = async (
   docId: number,
   layerId: number,
   pixels: Uint8Array,
   geometry: ReturnType<typeof computePlaceGeometry>,
+  depth: ComponentDepth,
 ): Promise<void> => {
   const imaging = photoshop.imaging;
   if (typeof imaging?.createImageDataFromBuffer !== "function") {
     throw new Error("imaging.createImageDataFromBuffer 不可用（需要 PS 24.4+）");
   }
-  const imageData = await imaging.createImageDataFromBuffer(pixels, {
-    width: geometry.outW,
-    height: geometry.outH,
-    components: 4,
-    colorSpace: "RGB",
-    colorProfile: "sRGB IEC61966-2.1",
-  });
+  const imageData = await imaging.createImageDataFromBuffer(
+    scaleSamplesToDepth(pixels, depth),
+    {
+      width: geometry.outW,
+      height: geometry.outH,
+      components: 4,
+      colorSpace: "RGB",
+      colorProfile: "sRGB IEC61966-2.1",
+      ...depthBufferOption(depth),
+    },
+  );
   try {
     bumpCounter("putPixels", "placeBack.writePixels", {
       documentID: docId,
@@ -338,13 +353,20 @@ const applyLayerMask = async (
       geometry.targetLeft,
       geometry.targetTop,
     );
-    const maskData = await imaging.createImageDataFromBuffer(canvasMask, {
-      width: canvasWidth,
-      height: canvasHeight,
-      components: 1,
-      colorSpace: "Grayscale",
-      colorProfile: "Gray Gamma 2.2",
-    });
+    // 蒙版缓冲同样按文档位深构造（16/32 位文档的蒙版通道与文档同深；
+    // putLayerMask 与 putPixels 同样不做位深转换）
+    const maskDepth = parseComponentDepth(doc.bitsPerChannel);
+    const maskData = await imaging.createImageDataFromBuffer(
+      scaleSamplesToDepth(canvasMask, maskDepth),
+      {
+        width: canvasWidth,
+        height: canvasHeight,
+        components: 1,
+        colorSpace: "Grayscale",
+        colorProfile: "Gray Gamma 2.2",
+        ...depthBufferOption(maskDepth),
+      },
+    );
     try {
       // putLayerMask 虽带 documentID，仍在写入前确认目标文档存在，避免写空文档对象
       assertTargetDocumentOpen(doc.id);
@@ -702,7 +724,13 @@ export const placeBack = async (input: PlaceBackInput): Promise<PlaceBackResult>
 
       let layer = await createLayer();
       try {
-        await writePixels(doc.id, layer.id, primary, geometry);
+        await writePixels(
+          doc.id,
+          layer.id,
+          primary,
+          geometry,
+          parseComponentDepth(doc.bitsPerChannel),
+        );
       } catch (e) {
         deleteLayer(layer);
         throw e;
@@ -748,7 +776,13 @@ export const placeBack = async (input: PlaceBackInput): Promise<PlaceBackResult>
         }
         try {
           layer = await createLayer();
-          await writePixels(doc.id, layer.id, maskedPixels, geometry);
+          await writePixels(
+            doc.id,
+            layer.id,
+            maskedPixels,
+            geometry,
+            parseComponentDepth(doc.bitsPerChannel),
+          );
         } catch (fallbackError) {
           const fallbackMsg =
             fallbackError instanceof Error
