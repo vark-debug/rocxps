@@ -1344,7 +1344,16 @@ export const captureSelection = async (
         assertPresetSendSize(sendWidth, sendHeight, preset);
         if (expanded.width !== sendWidth || expanded.height !== sendHeight) {
           sendPixels = await step("缩放到预设尺寸", () =>
-            resizeRgba(pixels, expanded.width, expanded.height, sendWidth, sendHeight),
+            resizeRgba(
+              pixels,
+              expanded.width,
+              expanded.height,
+              sendWidth,
+              sendHeight,
+              // 路径 A 的 requireOpaque 逐瓦片扫描保证 alpha 全 255
+              //（补边为边缘复制），预乘/反预乘逐位恒等，可安全跳过
+              capturePath === "A",
+            ),
           );
           sendMask = {
             width: sendWidth,

@@ -56,6 +56,24 @@ describe("resizeRgba（Lanczos3，对齐 Pillow LANCZOS）", () => {
     assert.throws(() => resizeRgba(px, 1, 1, 2, 0));
   });
 
+  it("opaqueHint 与默认路径输出逐位一致（全不透明源，缩小 + 放大）", () => {
+    for (const [sw, sh, dw, dh] of [
+      [40, 24, 25, 16],
+      [24, 16, 48, 32],
+    ] as const) {
+      const src = new Uint8Array(sw * sh * 4);
+      for (let p = 0; p < src.length; p += 4) {
+        src[p] = (p * 37 + 11) & 0xff;
+        src[p + 1] = (p * 53 + 7) & 0xff;
+        src[p + 2] = (p * 97 + 3) & 0xff;
+        src[p + 3] = 255;
+      }
+      const plain = resizeRgba(src, sw, sh, dw, dh);
+      const hinted = resizeRgba(src, sw, sh, dw, dh, true);
+      assert.deepEqual(Array.from(hinted), Array.from(plain));
+    }
+  });
+
   it("源数据长度与尺寸不符抛错", () => {
     assert.throws(() => resizeRgba(new Uint8Array(3), 1, 1, 2, 2));
   });
