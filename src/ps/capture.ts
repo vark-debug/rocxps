@@ -10,8 +10,8 @@ import {
   parseComponentDepth,
   scaleSamplesToDepth,
 } from "./bitDepth";
+import { BUILD_STAMP, diagKey, ensureDiagSession, errText } from "./placeBackDiag";
 import { encodePng } from "./pngEncoder";
-import { CAPTURE_ALIGN } from "./align";
 import { resizeGray, resizeRgba } from "./resize";
 import {
   MAX_TILE_PIXELS,
@@ -20,6 +20,7 @@ import {
   planTiles,
   toRgba,
 } from "./tileRead";
+import { convertRgbaProPhotoToSrgb } from "./colorConvert";
 import type { PadAmounts } from "./geometry";
 import type { Rect, ExpandedRegion } from "./types";
 import {
@@ -39,6 +40,7 @@ import {
 } from "./presets";
 import type { Document } from "photoshop/dom/Document";
 import type { ActionDescriptor } from "photoshop/dom/CoreModules";
+import type { Layer } from "photoshop/dom/Layer";
 
 /**
  * 选区捕获管线（docs/local-redraw-plan.md §2.1 / M1）。
@@ -177,6 +179,52 @@ const step = async <T>(name: string, fn: () => Promise<T> | T): Promise<T> => {
   }
 };
 
+/**
+ * 诊断：采集文档事实（模式 / 位深 / 色彩配置 / 图层类型清单）。
+ * -32005「无法更新智能对象文件」高度怀疑与失效链接的智能对象有关，
+ * 图层 kind 清单与粘贴产物 kind 是定位关键。任何字段读取失败都记下
+ * 失败原因，绝不让日志采集本身影响捕获主流程。
+ */
+const diagDocFacts = (doc: Document): Record<string, unknown> => {
+  const facts: Record<string, unknown> = { docId: doc.id };
+  const readers: [string, () => unknown][] = [
+    ["name", () => doc.name],
+    ["mode", () => String(doc.mode)],
+    ["bits", () => String(doc.bitsPerChannel)],
+    ["profile", () => String(doc.colorProfileName ?? "")],
+    ["canvas", () => ({ w: toPx(doc.width), h: toPx(doc.height) })],
+    ["layersCount", () => doc.layers?.length ?? null],
+  ];
+  for (const [key, read] of readers) {
+    try {
+      facts[key] = read();
+    } catch (e) {
+      facts[key] = `读取失败: ${errText(e)}`;
+    }
+  }
+  try {
+    const smartObjectKind = photoshop.constants?.LayerKind?.SMARTOBJECT;
+    facts.layers = (doc.layers ?? []).slice(0, 30).map((l) => {
+      let kind: unknown = null;
+      try {
+        kind = l.kind;
+      } catch {
+        /* kind 读取失败时记 null */
+      }
+      return {
+        id: l.id,
+        kind: String(kind),
+        isSmartObject: kind !== null && kind === smartObjectKind,
+        name: l.name,
+        visible: l.visible,
+      };
+    });
+  } catch (e) {
+    facts.layers = `图层列举失败: ${errText(e)}`;
+  }
+  return facts;
+};
+
 /** modal 内 batchPlay 必须同步执行（sync:false 会延迟执行，是 -25920 的根因之一）。 */
 const syncBpOptions = {
   synchronousExecution: true,
@@ -199,6 +247,110 @@ const assertNoError = (
       );
     }
   }
+};
+
+/**
+ * 诊断：AM 视角智能对象探针。DOM kind 报告全部 "pixel" 但引擎仍报
+ * 「无法更新智能对象文件」时，用 batchPlay get smartObject 属性定论：
+ * 引擎视角是否存在智能对象状态（含 DOM 看不见的幻影状态）。
+ * 仅观测，任何失败都记录后继续，绝不影响主流程。
+ */
+const probeSmartObjects = async (doc: Document): Promise<void> => {
+  const flat: Array<{
+    id: number;
+    name: string;
+    domKind: string;
+    isGroup: boolean;
+  }> = [];
+  const walk = (items: readonly Layer[] | undefined) => {
+    for (const l of items ?? []) {
+      const isGroup = l.kind === photoshop.constants.LayerKind.GROUP;
+      flat.push({ id: l.id, name: l.name, domKind: String(l.kind), isGroup });
+      if (isGroup) walk((l as { items?: readonly Layer[] }).items);
+    }
+  };
+  try {
+    walk(doc.layers);
+  } catch (e) {
+    diagKey("智能对象探针", { error: `DOM 遍历失败: ${errText(e)}` });
+    return;
+  }
+  const probes: Array<{
+    id: number;
+    name: string;
+    hasSmartObject?: boolean;
+    error?: string;
+  }> = [];
+  for (const l of flat) {
+    try {
+      const results = await photoshop.action.batchPlay(
+        [
+          {
+            _obj: "get",
+            _target: [
+              { _property: "smartObject" },
+              { _ref: "layer", _id: l.id },
+            ],
+            _options: { dialogOptions: "dontDisplay" },
+          },
+        ],
+        syncBpOptions,
+      );
+      const r0 = results?.[0] as
+        | { _obj?: string; message?: string; smartObject?: Record<string, unknown> }
+        | undefined;
+      probes.push(
+        r0?._obj === "error"
+          ? { id: l.id, name: l.name, error: r0.message ?? "未知错误" }
+          : { id: l.id, name: l.name, hasSmartObject: Boolean(r0?.smartObject) },
+      );
+    } catch (e) {
+      probes.push({ id: l.id, name: l.name, error: errText(e) });
+    }
+  }
+  diagKey("智能对象探针", { layerCount: flat.length, layers: flat, probes });
+};
+
+/**
+ * 诊断：单图层栅格读对照（合成直读失败后调用）。
+ * - 单图层读成功 → 栅格缓存完好，只有合成渲染受损（逐层读+本地合成的
+ *   路径 C 可救）；
+ * - 单图层读也失败 → imaging 通道整体故障。
+ * 先试转换读（与路径 A 同参数），失败再试原生读，凑齐对照矩阵。
+ */
+const probeLayerRasterRead = async (doc: Document): Promise<void> => {
+  const imaging = photoshop.imaging;
+  const layer = (doc.layers ?? []).find((l) => l.visible);
+  if (!imaging?.getPixels || !layer) {
+    diagKey("单图层读对照", { ok: false, error: "无可见图层或 imaging 不可用" });
+    return;
+  }
+  const attempts: Array<Record<string, unknown>> = [];
+  for (const label of ["转换读", "原生读"] as const) {
+    try {
+      const result = await imaging.getPixels({
+        documentID: doc.id,
+        layerID: layer.id,
+        sourceBounds: { left: 0, top: 0, right: 256, bottom: 256 },
+        ...(label === "转换读" ? { componentSize: 8 as const } : {}),
+      });
+      const img = result.imageData;
+      try {
+        attempts.push({
+          mode: label,
+          ok: true,
+          componentSize: img.componentSize,
+          components: img.components,
+          sourceBounds: result.sourceBounds,
+        });
+      } finally {
+        await img.dispose();
+      }
+    } catch (e) {
+      attempts.push({ mode: label, ok: false, error: errText(e) });
+    }
+  }
+  diagKey("单图层读对照", { layerId: layer.id, attempts });
 };
 
 /** batchPlay：把选区设为矩形（仅 PS < 25 无 DOM selectRectangle 时的回退路径）。 */
@@ -357,16 +509,42 @@ const normalizeTo8 = (
 };
 
 /**
- * 把 getPixels 返回的原始像素统一为 RGBA：3 通道（RGB，源不含 alpha 通道）
- * 补 alpha=255；4 通道原样返回；其他格式返回 null（调用方走路径 B）。
- * 注意：GetPixelsOptions 没有 components 请求项，返回通道数取决于源。
+ * 原生位深回退读的归一化（转换读失败时的兜底路径，仅观测日志驱动）。
+ * 16 位：getData 已显式请求减范围 [0..32768]（fullRange:false，文档默认值），
+ * 按 255/32768 线性映射；同时实测 max 判定宿主真实行为——若 max > 40000
+ * 说明数据实为全范围（宿主忽略请求），改按 >>8 缩放，避免错误假设导致
+ * 半亮 / 全白。32 位：[0..1] 浮点 ×255 截断。
  */
-// 实现在 tileRead.ts（纯函数，可 Node 单测）
+const normalizeToDepth8 = (
+  src: Uint8Array | Uint16Array | Float32Array,
+  componentSize: number,
+): Uint8Array => {
+  if (componentSize === 16) {
+    const u16 = src as Uint16Array;
+    let max = 0;
+    for (let i = 0; i < u16.length; i++) if (u16[i] > max) max = u16[i];
+    const fullRange = max > 40000;
+    diagKey("原生16位范围观测", { max, fullRange });
+    const out = new Uint8Array(u16.length);
+    if (fullRange) {
+      for (let i = 0; i < u16.length; i++) out[i] = u16[i] >> 8;
+    } else {
+      for (let i = 0; i < u16.length; i++) {
+        const v = Math.round((u16[i] * 255) / 32768);
+        out[i] = v > 255 ? 255 : v;
+      }
+    }
+    return out;
+  }
+  return normalizeTo8(src, componentSize, src.length);
+};
 
-export interface TileReadOptions {
+interface TileReadOptions {
   componentSize?: 8;
   colorSpace?: "RGB";
   colorProfile?: string;
+  /** 源文档色彩配置标记：ProPhoto 文档的回退读需本地矩阵转 sRGB（见 colorConvert.ts）。 */
+  sourceProfile?: "prophoto";
   /** 只读取指定图层（超分用）；缺省读文档合成像素。 */
   layerID?: number;
 }
@@ -378,9 +556,11 @@ export interface TileReadOptions {
  *   dispose：既规避单次大缓冲的 "Invalid array length"，也满足 PS 只保留
  *   1-2 个 imageData 槽位的限制；
  * - PS 可能把 sourceBounds 收紧到含像素数据的区域，按实际偏移零填充拼接；
- * - 通道数不是 3/4 → null；requireOpaque 时遇透明像素立即返回 null（走路径 B）。
+ * - 通道数不是 3/4 → null；requireOpaque 时遇透明像素立即返回 null（走路径 B）；
+ * - 转换读失败走原生位深回退时，宿主色彩转换被跳过：ProPhoto 文档由
+ *   colorConvert 本地矩阵转回 sRGB（其余宽色域暂不支持，宁缺毋错）。
  */
-export const readRegionRgbaTiled = async (
+const readRegionRgbaTiled = async (
   docId: number,
   bounds: Rect,
   options: TileReadOptions,
@@ -389,34 +569,100 @@ export const readRegionRgbaTiled = async (
   const imaging = photoshop.imaging;
   if (!imaging?.getPixels) return null;
 
+  // sourceProfile 是本模块的内部标记，不透传给 imaging.getPixels
+  const { sourceProfile, ...getPixelsOptions } = options;
+  // 其他宽色域文档回退后暂无本地转换矩阵：只记一次，避免逐瓦片刷日志
+  let warnedSkipConvert = false;
+
   const dstW = bounds.right - bounds.left;
   const dstH = bounds.bottom - bounds.top;
   const dst = new Uint8Array(dstW * dstH * 4);
 
   for (const tile of planTiles(bounds, MAX_TILE_PIXELS)) {
-    const pixels = await step("读取像素", () =>
-      imaging.getPixels({
-        documentID: docId,
-        sourceBounds: {
-          left: tile.left,
-          top: tile.top,
-          right: tile.right,
-          bottom: tile.bottom,
-        },
-        ...options,
-      }),
-    );
+    // 本瓦片是否走了原生位深回退（决定是否需要本地色彩转换）
+    let usedFallback = false;
+    const pixels = await step("读取像素", async () => {
+      try {
+        return await imaging.getPixels({
+          documentID: docId,
+          sourceBounds: {
+            left: tile.left,
+            top: tile.top,
+            right: tile.right,
+            bottom: tile.bottom,
+          },
+          ...getPixelsOptions,
+        });
+      } catch (e) {
+        diagKey("读取像素失败", {
+          docId,
+          requireOpaque,
+          tile,
+          options,
+          error: errText(e),
+        });
+        // 原生位深回退：转换读（componentSize / 色彩配置转换）可能在本会话
+        // 失败（16 位文档实测 -32005 毒化错误），去掉转换参数按文档原生位深
+        // 重读、本地归一化。保留 layerID（单图层读数路径），只丢位深/色彩转换。
+        try {
+          const fallback = await imaging.getPixels({
+            documentID: docId,
+            ...(getPixelsOptions.layerID
+              ? { layerID: getPixelsOptions.layerID }
+              : {}),
+            sourceBounds: {
+              left: tile.left,
+              top: tile.top,
+              right: tile.right,
+              bottom: tile.bottom,
+            },
+          });
+          usedFallback = true;
+          diagKey("原生位深回退成功", {
+            docId,
+            tile,
+            componentSize: fallback.imageData.componentSize,
+            components: fallback.imageData.components,
+          });
+          return fallback;
+        } catch (e2) {
+          diagKey("原生位深回退失败", { docId, tile, error: errText(e2) });
+          throw e;
+        }
+      }
+    });
     const img = pixels.imageData;
     try {
-      if (img.componentSize !== 8) return null;
       const sb = pixels.sourceBounds;
       // 收紧到空区域（整块透明/画布外）时直接跳过，保持目标缓冲的 0
       if (sb.right <= sb.left || sb.bottom <= sb.top) continue;
-      const data = new Uint8Array(
-        await step("读取分块像素数据", () => img.getData({ chunky: true })),
+      // 原生位深（componentSize != 8）也照常消费：getData 显式请求减范围，
+      // 本地归一化为 8 位后再进 RGBA 拼接（16 位文档转换读失败时的兜底）
+      const raw = await step(
+        img.componentSize === 8
+          ? "读取分块像素数据"
+          : "读取分块像素数据（原生位深）",
+        () =>
+          img.getData({
+            chunky: true,
+            ...(img.componentSize === 16 ? { fullRange: false } : {}),
+          }),
       );
-      const rgba = toRgba(data, img.width, img.height);
+      const data8 = normalizeToDepth8(raw, img.componentSize);
+      const rgba = toRgba(data8, img.width, img.height);
       if (!rgba) return null;
+      // 回退读拿到的是文档原生色彩编码：宿主转换读被跳过，本地矩阵补转换。
+      // 仅 ProPhoto 有矩阵实现；其他宽色域保留原值并记录（避免用错矩阵偏色）。
+      if (usedFallback && sourceProfile === "prophoto") {
+        convertRgbaProPhotoToSrgb(rgba);
+        diagKey("回退路径本地色彩转换", { docId, tile });
+      } else if (usedFallback && options.colorProfile && !warnedSkipConvert) {
+        warnedSkipConvert = true;
+        diagKey("回退路径跳过本地色彩转换", {
+          docId,
+          colorProfile: options.colorProfile,
+        });
+      }
       if (requireOpaque) {
         for (let i = 3; i < rgba.length; i += 4) {
           if (rgba[i] < 255) return null;
@@ -480,7 +726,7 @@ const captureMask = async (doc: Document, bounds: Rect): Promise<MaskData> => {
 /** 位深 / 宽色域归一化参数：图层读数、文档合成读数共用（非 RGB 返回 null）。 */
 const pixelReadOptions = (
   doc: Document,
-): { componentSize?: 8; colorSpace?: "RGB"; colorProfile?: string } | null => {
+): Omit<TileReadOptions, "layerID"> | null => {
   if (doc.mode !== photoshop.constants.DocumentMode.RGB) return null;
   const bitDepth = String(doc.bitsPerChannel);
   let profileName = "";
@@ -501,6 +747,9 @@ const pixelReadOptions = (
       : {}),
     ...(isWideGamut
       ? { colorSpace: "RGB" as const, colorProfile: "sRGB IEC61966-2.1" }
+      : {}),
+    ...(profileName.includes("prophoto")
+      ? { sourceProfile: "prophoto" as const }
       : {}),
   };
 };
@@ -551,37 +800,12 @@ const readMergedPixelsDirect = async (
   const imaging = photoshop.imaging;
   if (!imaging?.getPixels) return null;
 
-  // 非 RGB（灰度/CMYK/索引等）交由路径 B：临时文档粘贴时统一转 RGB
-  if (doc.mode !== photoshop.constants.DocumentMode.RGB) return null;
-
-  // 16/32 位文档强制转 8 位读取；宽色域强制 sRGB（对齐参考项目）
-  const bitDepth = String(doc.bitsPerChannel);
-  let profileName = "";
-  try {
-    profileName = (doc.colorProfileName || "").toLowerCase();
-  } catch {
-    /* 无配置文件的文档按普通 sRGB 处理 */
-  }
-  const isWideGamut =
-    profileName.includes("prophoto") ||
-    profileName.includes("adobe rgb") ||
-    profileName.includes("display p3") ||
-    profileName.includes("dci-p3") ||
-    profileName.includes("wide gamut");
-
-  return readRegionRgbaTiled(
-    doc.id,
-    bounds,
-    {
-      ...(bitDepth.includes("16") || bitDepth.includes("32")
-        ? { componentSize: 8 as const }
-        : {}),
-      ...(isWideGamut
-        ? { colorSpace: "RGB" as const, colorProfile: "sRGB IEC61966-2.1" }
-        : {}),
-    },
-    true,
-  );
+  // 非 RGB（灰度/CMYK/索引等）交由路径 B：临时文档粘贴时统一转 RGB；
+  // 16/32 位强制转 8 位读取；宽色域强制 sRGB（对齐参考项目）
+  const options = pixelReadOptions(doc);
+  if (!options) return null;
+  diagKey("路径A直读开始", { docId: doc.id, bounds, options });
+  return readRegionRgbaTiled(doc.id, bounds, options, true);
 };
 
 /**
@@ -607,6 +831,11 @@ const captureRgbaViaTempDoc = async (
   // 会成为活动层，导致 copy(true) 的合并结果只含技术层像素（参考项目 L696）。
   // copy(true) 实际拷贝全部可见图层合成，载体图层是谁不影响内容。
   const copyTarget = doc.activeLayers?.[0] ?? null;
+  diagKey("路径B开始", {
+    docId: doc.id,
+    bounds,
+    copyTargetId: copyTarget?.id ?? null,
+  });
 
   const suspension = await hostControl.suspendHistory({
     documentID: doc.id,
@@ -707,17 +936,67 @@ const captureRgbaViaTempDoc = async (
       resolution: doc.resolution,
       mode: photoshop.constants.NewDocumentMode.RGB,
       fill: photoshop.constants.DocumentFill.TRANSPARENT,
+      // 显式锁 8 位深：不传时实测会继承主文档 bitDepth16，把路径 B 的
+      // componentSize:8 读也拖进同一失败的转换读；8 位临时文档读即原生读
+      depth: 8,
     }),
   );
   if (!tmp) throw new Error("创建临时文档失败");
   if (tmp.id === doc.id) {
     throw new Error("临时文档创建失败（误引用主文档，已中止以保护原文档）");
   }
+  diagKey("临时文档已创建", {
+    tmpId: tmp.id,
+    bits: String(tmp.bitsPerChannel),
+    mode: String(tmp.mode),
+    width: toPx(tmp.width),
+    height: toPx(tmp.height),
+  });
 
   try {
     // 4) 粘贴并按图层实际位置对齐到 (0,0)
     //    （合并拷贝裁透明边时粘贴内容会偏移，用 bounds 校正）
-    const layer = await step("粘贴", () => tmp.paste());
+    let layer: Layer | null = await step("粘贴", () => tmp.paste());
+    if (!layer) {
+      diagKey("DOM 粘贴无图层", { tmpId: tmp.id });
+      // DOM paste 返回 null（剪贴板为空或 DOM 包装吞掉错误）：batchPlay paste
+      // 兜底并采集 PS 真实错误文本——失败原因的定性证据
+      try {
+        const results = await step("batchPlay 粘贴", () =>
+          photoshop.action.batchPlay(
+            [
+              {
+                _obj: "paste",
+                antiAlias: { _enum: "antiAliasType", _value: "document" },
+                as: { _enum: "pixelDataType", _value: "pixel" },
+              },
+            ],
+            syncBpOptions,
+          ),
+        );
+        assertNoError(results, "batchPlay 粘贴");
+        layer = tmp.activeLayers?.[0] ?? null;
+        diagKey("batchPlay 粘贴恢复", {
+          layerId: layer?.id ?? null,
+          kind: layer ? String(layer.kind) : null,
+        });
+      } catch (e) {
+        diagKey("batchPlay 粘贴失败", { error: errText(e) });
+      }
+    }
+    diagKey("粘贴结果", {
+      layerId: layer?.id ?? null,
+      kind: layer ? String(layer.kind) : null,
+      name: layer?.name ?? null,
+      bounds: layer
+        ? {
+            left: toPx(layer.bounds.left),
+            top: toPx(layer.bounds.top),
+            right: toPx(layer.bounds.right),
+            bottom: toPx(layer.bounds.bottom),
+          }
+        : null,
+    });
     if (layer) {
       const left = toPx(layer.bounds.left);
       const top = toPx(layer.bounds.top);
@@ -798,6 +1077,19 @@ export const captureSelection = async (
       await closeOrphanTempDocs();
       const doc = photoshop.app.activeDocument;
       if (!doc) throw new Error("请先打开一个文档");
+      ensureDiagSession();
+      diagKey("捕获开始", {
+        build: BUILD_STAMP,
+        ps: appVersion(),
+        doc: diagDocFacts(doc),
+      });
+      // 诊断探针：AM 视角逐层读取 smartObject 属性，与 DOM kind 清单交叉验证
+      //（-32005 报「无法更新智能对象文件」而 DOM 全部 kind:"pixel"，需引擎定论）
+      try {
+        await probeSmartObjects(doc);
+      } catch {
+        /* 探针失败不影响主流程 */
+      }
 
       // 1. 原选区 bounds（改选区前读取）
       const selection = await readSelection();
@@ -931,6 +1223,14 @@ export const captureSelection = async (
         pixels = await readMergedPixelsDirect(doc, clip);
       } catch (e) {
         directError = e instanceof Error ? e.message : String(e);
+        diagKey("直读失败", { error: directError });
+        // 诊断探针：单图层读对照——区分「栅格缓存完好但合成渲染受损」与
+        //「imaging 通道整体故障」
+        try {
+          await probeLayerRasterRead(doc);
+        } catch {
+          /* 探针失败不影响主流程 */
+        }
       }
       if (pixels === null) {
         try {
@@ -941,6 +1241,7 @@ export const captureSelection = async (
           );
         } catch (e) {
           const msg = e instanceof Error ? e.message : String(e);
+          diagKey("路径B失败", { error: msg, directError });
           throw directError
             ? new Error(`${msg}（直读回退原因：${directError}）`)
             : e;
