@@ -19,7 +19,8 @@ const rect = (l: number, t: number, r: number, b: number): Rect => ({
 
 /** 100% 缩放、视口从文档 (0,0) 开始、视口屏幕位置 (100,100) 起 800×600 */
 const view1: CanvasView = {
-  scale: 1,
+  scaleX: 1,
+  scaleY: 1,
   docOffsetLeft: 0,
   docOffsetTop: 0,
   viewport: rect(100, 100, 900, 700),
@@ -27,7 +28,8 @@ const view1: CanvasView = {
 
 /** 200% 放大（m=0.5）、视口左上角在文档 (100,50)、屏幕位置 (200,100) 起 1000×600 */
 const view2: CanvasView = {
-  scale: 0.5,
+  scaleX: 0.5,
+  scaleY: 0.5,
   docOffsetLeft: 100,
   docOffsetTop: 50,
   viewport: rect(200, 100, 1200, 700),
@@ -51,6 +53,17 @@ describe("docToScreen", () => {
       right: 210,
       bottom: 320,
     });
+  });
+  it("x/y 缩放轻微不一致（PS 27 正常现象）→ 两轴按各自缩放换算", () => {
+    // 真机日志 doc=110 的实测值：x/y 缩放差 0.015%，曾因等值校验被误拒
+    const aniso: CanvasView = {
+      ...view1,
+      scaleX: 1.38996138996139,
+      scaleY: 1.3901734104046244,
+    };
+    const r = docToScreen(aniso, 1080, 1443);
+    assert.equal(r.x, 100 + 1080 / 1.38996138996139);
+    assert.equal(r.y, 100 + 1443 / 1.3901734104046244);
   });
 });
 

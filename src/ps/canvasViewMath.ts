@@ -9,17 +9,20 @@ import type { Rect } from "./types";
  *   即 viewInfo.activeView.globalBounds 所在空间）；
  * - 换算到 Cocoa（bottom-left 原点）在 native 侧完成。
  *
- * 数据来源（PS 2026 26.x 实测可用的私有 batchPlay 属性，社区脚本验证）：
- * - document.viewTransform：6 元素列表 [m, ?, ?, m, offsetLeft, offsetTop]，
- *   m = 文档像素/屏幕点（放大率 200% 时 0.5），offset = 视口左上角的文档坐标；
+ * 数据来源（私有 batchPlay 属性，社区脚本验证；PS 27 实测仍可读）：
+ * - document.viewTransform：6 元素列表 [mx, ?, ?, my, offsetLeft, offsetTop]，
+ *   mx/my = 文档像素/屏幕点（放大率 200% 时 0.5，两轴可有 ≤0.1% 正常差异），
+ *   offset = 视口左上角的文档坐标；
  * - document.viewInfo.activeView.globalBounds：视口的全局屏幕矩形。
  *   screen = viewport.left + (doc - offset) / m。
  */
 
 /** 画布视口（一次 batchPlay 读取的结果） */
 export interface CanvasView {
-  /** 缩放因子：文档像素 / 屏幕点（viewTransform[0]，恒 > 0） */
-  scale: number;
+  /** 缩放因子：文档像素 / 屏幕点（viewTransform[0]/[3]，恒 > 0）。
+   *  PS 27 实测 x/y 两轴存在 ≤0.1% 的正常差异，分开使用、不做等值校验。 */
+  scaleX: number;
+  scaleY: number;
   /** 视口左上角的文档坐标（viewTransform[4]/[5]） */
   docOffsetLeft: number;
   docOffsetTop: number;
@@ -36,8 +39,8 @@ export const docToScreen = (
   x: number,
   y: number,
 ): { x: number; y: number } => ({
-  x: v.viewport.left + (x - v.docOffsetLeft) / v.scale,
-  y: v.viewport.top + (y - v.docOffsetTop) / v.scale,
+  x: v.viewport.left + (x - v.docOffsetLeft) / v.scaleX,
+  y: v.viewport.top + (y - v.docOffsetTop) / v.scaleY,
 });
 
 /** 文档矩形（画布/选区）→ 全局屏幕矩形 */
