@@ -75,13 +75,14 @@ describe("intersectRects", () => {
 });
 
 describe("placeToolbar", () => {
-  const args = (sel: Rect, view: CanvasView, w = 380, h = 40) => ({
+  const args = (sel: Rect, view: CanvasView, w = 380, h = 40, clampRect?: Rect | null) => ({
     view,
     selDoc: sel,
     docWidth: 2000,
     docHeight: 1500,
     toolbarWidth: w,
     toolbarHeight: h,
+    ...(clampRect !== undefined ? { clampRect } : {}),
   });
 
   it("无视口 → null（调用方退回固定定位）", () => {
@@ -127,5 +128,33 @@ describe("placeToolbar", () => {
     const tiny: CanvasView = { ...view1, viewport: rect(100, 100, 300, 700) };
     const r = placeToolbar(args(rect(120, 200, 180, 300), tiny, 380, 40));
     assert.deepEqual(r, { x: 100, y: 416 });
+  });
+
+  it("文档窗口钳制盒：选区贴视口底缘 → 浮条落窗口内视口下方灰区", () => {
+    // 选区屏幕 (400,600)-(600,700) 底缘贴视口底缘 700；文档窗口底缘延伸到
+    // 860：下方 716+40=756 ≤ 860 → 直接放下方（旧可见画布语义会翻到上方 544）
+    const win: Rect = rect(100, 100, 900, 860);
+    const r = placeToolbar(args(rect(300, 500, 500, 600), view1, 380, 40, win));
+    assert.deepEqual(r, { x: 310, y: 716 });
+  });
+
+  it("clampRect 为 null → 退回可见画布钳制（旧语义）", () => {
+    const r = placeToolbar(args(rect(300, 560, 500, 660), view1, 380, 40, null));
+    assert.deepEqual(r, { x: 310, y: 604 });
+  });
+
+  it("浮条宽于文档窗口 → 贴窗口左缘", () => {
+    // 窗口宽 200 < 浮条 380：钳制 x = 300-380 = -80 < 窗口左缘 100 → 贴左
+    const win: Rect = rect(100, 100, 300, 860);
+    const r = placeToolbar(args(rect(300, 200, 500, 300), view1, 380, 40, win));
+    assert.deepEqual(r, { x: 100, y: 416 });
+  });
+
+  it("窗口内上下都放不下 → 贴窗口底缘内侧", () => {
+    // 窗口 (100,100)-(900,240)，选区屏幕 (400,130)-(600,210)：
+    // 下方 226+40=266 > 240，上方 130-56=74 < 100 → 贴底 240-40
+    const win: Rect = rect(100, 100, 900, 240);
+    const r = placeToolbar(args(rect(300, 30, 500, 110), view1, 380, 40, win));
+    assert.deepEqual(r, { x: 310, y: 200 });
   });
 });

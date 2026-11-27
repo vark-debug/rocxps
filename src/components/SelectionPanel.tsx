@@ -4,6 +4,7 @@ import { readSelection, type SelectionInfo } from "../ps/selection";
 import { readCanvasView, placeToolbar } from "../ps/canvasView";
 import { generateFromSelection } from "../task/generateFlow";
 import {
+  getDocWindowFrame,
   hideToolbar,
   setToolbarState,
   showToolbar,
@@ -110,8 +111,12 @@ export const SelectionPanel = () => {
     setSelText(text);
     if (text) {
       // 选区锚点定位（三场景规则见 canvasViewMath.placeToolbar）：读取视口
-      // 失败（旋转画布/版本不支持等）时 anchor 为 null → 退回 native 固定定位
-      const view = await readCanvasView();
+      // 失败（旋转画布/版本不支持等）时 anchor 为 null → 退回 native 固定定位；
+      // 文档窗口 frame 读取失败/无效时 clampRect 为 null → 退回旧「可见画布」钳制
+      const [view, winFrame] = await Promise.all([
+        readCanvasView(),
+        getDocWindowFrame().catch(() => null),
+      ]);
       const anchor = selInfo
         ? placeToolbar({
             view,
@@ -120,6 +125,7 @@ export const SelectionPanel = () => {
             docHeight: selInfo.canvasHeight,
             toolbarWidth: TOOLBAR_SIZE.width,
             toolbarHeight: TOOLBAR_SIZE.height,
+            clampRect: winFrame,
           })
         : null;
       // 浮现：出现即全量复位浮窗状态（连续操作不串状态）；事件循环幂等启动

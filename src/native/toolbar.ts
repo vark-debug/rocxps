@@ -39,6 +39,14 @@ export interface ToolbarUiState {
   value?: string;
 }
 
+/** 文档窗口 frame（全局屏幕坐标，top-left 原点，点），供浮条钳制用 */
+export interface DocWindowFrame {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
 interface ToolbarAddon {
   /** 显示浮窗：首次调用创建（PS 主线程），重复调用重新显示并重定位 */
   showToolbar(options?: {
@@ -54,6 +62,8 @@ interface ToolbarAddon {
   setToolbarState(state: ToolbarUiState): Promise<void>;
   /** 等待下一个 UI 事件；返回 null 表示异常终止 */
   waitToolbarEvent(): Promise<{ raw: string } | null>;
+  /** 读取当前 PS 文档窗口 frame；找不到有效窗口时 raw 为空串 */
+  getDocWindowFrame(): Promise<{ raw: string } | null>;
 }
 
 /** require 返回 Promise；缓存成功实例，失败时清空以允许重载插件后重试 */
@@ -64,7 +74,7 @@ const loadAddon = (): Promise<ToolbarAddon> => {
     addonPromise = Promise.resolve()
       .then(() => Promise.resolve(require(SILICONED_ADDON) as ToolbarAddon | Promise<ToolbarAddon>))
       .then((addon) => {
-        const fns = ["showToolbar", "hideToolbar", "setToolbarState", "waitToolbarEvent"] as const;
+        const fns = ["showToolbar", "hideToolbar", "setToolbarState", "waitToolbarEvent", "getDocWindowFrame"] as const;
         for (const fn of fns) {
           if (!addon || typeof addon[fn] !== "function") {
             throw new Error(`addon 未导出 ${fn}（可能需要重新构建 native 组件）`);
@@ -141,4 +151,35 @@ export const waitToolbarEvent = async (): Promise<ToolbarEvent | null> => {
   } catch {
     return { type: "unknown" };
   }
+};
+
+/**
+ * 读取当前 PS 文档窗口 frame（native 侧在主线程查 NSApp windows）。
+ * 找不到有效文档窗口（最小化 / 跨 Space 等）或结果非法时返回 null，
+ * 调用方回退旧的「视口 ∩ 画布」钳制。
+ */
+export const getDocWindowFrame = async (): Promise<DocWindowFrame | null> => {
+  const addon = await loadAddon();
+  const raw = await addon.getDocWindowFrame();
+  if (!raw || !raw.raw) return null;
+  try {
+    const f = JSON.parse(raw.raw) as Partial<DocWindowFrame>;
+    if (
+      typeof f.x === "number" &&
+      Number.isFinite(f.x) &&
+      typeof f.y === "number" &&
+      Number.isFinite(f.y) &&
+      typeof f.width === "number" &&
+      Number.isFinite(f.width) &&
+      f.width > 0 &&
+      typeof f.height === "number" &&
+      Number.isFinite(f.height) &&
+      f.height > 0
+    ) {
+      return { x: f.x, y: f.y, width: f.width, height: f.height };
+    }
+  } catch {
+    // 解析失败按「找不到窗口」处理
+  }
+  return null;
 };
