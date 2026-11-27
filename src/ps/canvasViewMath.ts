@@ -69,29 +69,33 @@ export interface PlaceToolbarInput {
   toolbarWidth: number;
   toolbarHeight: number;
   gap?: number;
+  /** 钳制盒（全局屏幕坐标，top-left 原点）：文档窗口 frame（native
+   *  getDocWindowFrame）。提供时替代「可见画布」作为约束盒（选区贴视口
+   *  底缘时浮条可落进窗口内的灰区）；缺省/null 退回旧语义。 */
+  clampRect?: Rect | null;
 }
 
 /**
  * 浮窗摆放（已确认的三场景规则）：
  * 1. 垂直优先放选区正下方（选区外 gap），水平与选区中心对齐；
- * 2. 画布约束优先：浮窗任何时刻完整落在「可见画布」内
- *    （可见画布 = 画布屏幕矩形 ∩ 文档视口）；
- * 3. 下方放不下 → 翻到选区上方；水平居中出界 → 钳制进画布（放弃严格居中）；
- *    上下都放不下 → 兜底贴可见画布底缘内侧。
+ * 2. 约束盒：优先文档窗口 frame（clampRect），缺省退回可见画布
+ *    （画布屏幕矩形 ∩ 文档视口）；浮窗任何时刻完整落在约束盒内；
+ * 3. 下方放不下 → 翻到选区上方；水平居中出界 → 钳制进约束盒（放弃严格居中）；
+ *    上下都放不下 → 兜底贴约束盒底缘内侧。
  */
 export const placeToolbar = (input: PlaceToolbarInput): { x: number; y: number } | null => {
   const { view, selDoc, docWidth, docHeight, toolbarWidth: w, toolbarHeight: h } = input;
   const gap = input.gap ?? TOOLBAR_GAP;
   if (!view) return null;
 
-  // 钳制盒：可见画布（画布屏幕矩形 ∩ 视口）
+  // 钳制盒：文档窗口 frame 优先，缺省退回可见画布（画布屏幕矩形 ∩ 视口）
   const canvas = docRectToScreen(view, {
     left: 0,
     top: 0,
     right: docWidth,
     bottom: docHeight,
   });
-  const box = intersectRects(canvas, view.viewport);
+  const box = input.clampRect ?? intersectRects(canvas, view.viewport);
   if (!box) return null;
 
   // 选区屏幕矩形
